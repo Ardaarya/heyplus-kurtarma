@@ -3,73 +3,52 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HeyPlus W2100 Bind</title>
+<title>HeyPlus W2100 - Active Recovery</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
-  h1 { color: #0ff; font-size: 18px; margin-bottom: 12px; }
-  button { background: #0ff; color: #000; border: none; padding: 12px 24px; font-size: 16px;
-           font-family: monospace; font-weight: bold; border-radius: 4px; cursor: pointer;
-           width: 100%; margin: 8px 0; }
-  button:disabled { background: #333; color: #666; cursor: not-allowed; }
-  #btnCopy { background: #444; color: #e0e0e0; font-size: 13px; }
-  #btnCopy.copied { background: #0a3; color: #fff; }
-  #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px;
-         margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh;
-         overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-  .ok { color: #0f0; }
-  .err { color: #f44; }
-  .info { color: #0ff; }
-  .warn { color: #fa0; }
-  .phase { color: #f0f; font-weight: bold; }
+  body { font-family: monospace; background: #111122; color: #d0d0e0; padding: 16px; }
+  h1 { color: #00ffff; font-size: 16px; margin-bottom: 12px; letter-spacing: 0.5px; }
+  button { background: #00ffff; color: #000; border: none; padding: 14px 20px; font-size: 15px;
+           font-family: monospace; font-weight: bold; border-radius: 6px; cursor: pointer;
+           width: 100%; margin: 6px 0; box-shadow: 0 4px 10px rgba(0,255,255,0.2); }
+  button:disabled { background: #222; color: #555; cursor: not-allowed; box-shadow: none; }
+  #btnCopy { background: #333; color: #ccc; font-size: 12px; margin-top: 4px; }
+  #btnCopy.copied { background: #00aa55; color: #fff; }
+  #log { background: #080812; border: 1px solid #222; border-radius: 6px; padding: 14px;
+         margin-top: 14px; font-size: 11px; line-height: 1.5; max-height: 65vh;
+         overflow-y: auto; white-space: pre-wrap; word-break: break-all; color: #aaa; }
+  .ok { color: #00ff66; font-weight: bold; }
+  .err { color: #ff3344; }
+  .info { color: #00ffff; }
+  .phase { color: #ff00ff; font-weight: bold; border-bottom: 1px dashed #ff00ff; padding-bottom: 2px; }
 </style>
 </head>
 <body>
-<h1>HeyPlus W2100 - Serverless Bind</h1>
-<button id="btnBind" onclick="startBind()">CONNECT & BIND</button>
-<button id="btnCopy" onclick="copyLog()">COPY LOG</button>
+<h1>HeyPlus W2100 - Web RTC Sync</h1>
+<button id="btnBind" onclick="startBind()">CONNECT & SYNC TIME</button>
+<button id="btnCopy" onclick="copyLog()">COPY RUN LOG</button>
 <div id="log"></div>
 
 <script>
-// === Global System State Variables ===
 let sessionKey = null;
-let txCounter = 0;
 
-// === Copy log ===
 function copyLog() {
   const text = document.getElementById('log').innerText;
   navigator.clipboard.writeText(text).then(() => {
     const btn = document.getElementById('btnCopy');
-    btn.textContent = 'COPIED!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
-  }).catch(() => {
-    const ta = document.createElement('textarea');
-    ta.value = document.getElementById('log').innerText;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    const btn = document.getElementById('btnCopy');
-    btn.textContent = 'COPIED!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
+    btn.textContent = 'COPIED TO CLIPBOARD!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'COPY RUN LOG'; btn.classList.remove('copied'); }, 2000);
   });
 }
 
-// === Config ===
+// System Configuration Elements
 const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
 const DEVICE_PID = 911;
 
-// UUIDs
-const SERVICE_MI = '0000fe95-0000-1000-8000-00805f9b34fb';
-const CHAR_MI_TOKEN = '00000001-0000-1000-8000-00805f9b34fb';
-const CHAR_MI_EVENT = '00000010-0000-1000-8000-00805f9b34fb';
 const SERVICE_RYEEX = '0000b167-0000-1000-8000-00805f9b34fb';
 const CHAR_RYEEX_RC4 = '0000aa00-0000-1000-8000-00805f9b34fb';
 const CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
 
-// === Logging ===
 const logEl = document.getElementById('log');
 function log(msg, cls = '') {
   const span = document.createElement('span');
@@ -77,13 +56,6 @@ function log(msg, cls = '') {
   span.textContent = msg + '\n';
   logEl.appendChild(span);
   logEl.scrollTop = logEl.scrollHeight;
-}
-
-// === Crypto Utilities ===
-function int32ToLE(val) {
-  const buf = new ArrayBuffer(4);
-  new DataView(buf).setInt32(0, val, true);
-  return new Uint8Array(buf);
 }
 
 function hexStr(arr) {
@@ -114,7 +86,6 @@ function rc4(key, data) {
   return out;
 }
 
-// === Protobuf Encoding System ===
 function encodeVarint(value) {
   if (value < 0) {
     const parts = [];
@@ -138,15 +109,11 @@ function encodeVarint(value) {
 }
 
 function encodeFieldVarint(fieldNum, value) {
-  const tag = encodeVarint((fieldNum << 3) | 0);
-  const val = encodeVarint(value);
-  return concat(tag, val);
+  return concat(encodeVarint((fieldNum << 3) | 0), encodeVarint(value));
 }
 
 function encodeFieldBytes(fieldNum, data) {
-  const tag = encodeVarint((fieldNum << 3) | 2);
-  const len = encodeVarint(data.length);
-  return concat(concat(tag, len), data);
+  return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), data);
 }
 
 function concat(...arrs) {
@@ -169,20 +136,16 @@ function crc16ccitt(data) {
   return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
 }
 
-// === r_xfer Transport Layer Mechanics ===
 function buildCmdFrame(pkgCount, transferSession) {
   const buf = new Uint8Array(8);
-  buf[4] = pkgCount & 0xFF;
-  buf[5] = (pkgCount >> 8) & 0xFF;
-  buf[6] = transferSession & 0xFF;
-  buf[7] = (transferSession >> 8) & 0xFF;
+  buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF;
+  buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF;
   return buf;
 }
 
 function buildDataFrame(sn, payload) {
   const buf = new Uint8Array(2 + payload.length);
-  buf[0] = sn & 0xFF;
-  buf[1] = (sn >> 8) & 0xFF;
+  buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF;
   buf.set(payload, 2);
   return buf;
 }
@@ -190,7 +153,6 @@ function buildDataFrame(sn, payload) {
 async function xferSend(char, data) {
   const transferSession = Math.floor(Math.random() * 65535) + 100;
   const cmdFrame = buildCmdFrame(1, transferSession);
-  
   log('    CMD: ' + hexStr(cmdFrame), 'info');
   await char.writeValueWithResponse(cmdFrame);
   await new Promise(r => setTimeout(r, 60));
@@ -212,44 +174,41 @@ function buildRbpRequest(cmd, payload = null) {
   return msg;
 }
 
-// === PHASE 4: Core Web-Bluetooth Time Update Engine ===
-async function syncWatchTime(openChar) {
+// === PHASE 4: TIME UPDATE INJECTION EXECUTOR ===
+async function runTimeSyncPipeline(openChar) {
   log("\n=== [NEW CODE APPLIED] PHASE 4: Time Synchronization ===", "phase");
   
   const now = new Date();
   const timestampSeconds = Math.floor(now.getTime() / 1000);
-  
-  // Rectify local platform offset math variables
   const tzOffsetSeconds = -now.getTimezoneOffset() * 60; 
 
-  log(`[System Target] Local Browser Time: ${now.toString()}`);
-  log(`[Payload Generation] Unix Stamp: ${timestampSeconds} | TZ Offset: ${tzOffsetOffsetSeconds}s`, "info");
+  log(`[Sync Anchor] Device Target Clock: ${now.toString()}`);
+  log(`[Protobuf Compute] Epoch Secs: ${timestampSeconds} | TZ Offset: ${tzOffsetSeconds}s`, "info");
 
-  // Construct complete dynamic structural array expected by HeyPlus firmware
-  const field1 = encodeFieldVarint(1, timestampSeconds);
-  const field2 = encodeFieldVarint(2, tzOffsetSeconds);
-  const field3 = encodeFieldVarint(3, now.getMilliseconds());
-  const field4 = encodeFieldVarint(4, now.getTimezoneOffset() !== new Date(now.getFullYear(), 0, 1).getTimezoneOffset() ? 1 : 0);
+  // Format into 4-Field sequential structure required by Ryeex core components
+  const f1 = encodeFieldVarint(1, timestampSeconds);
+  const f2 = encodeFieldVarint(2, tzOffsetSeconds);
+  const f3 = encodeFieldVarint(3, now.getMilliseconds());
+  const f4 = encodeFieldVarint(4, 0); // Standard layout padding flag
   
-  const timeFields = concat(field1, field2, field3, field4);
+  const timePayloadFields = concat(f1, f2, f3, f4);
 
-  // Wrap inside Command ID 17 envelope and compile validation signature
-  const rbpPacket = buildRbpRequest(17, timeFields);
+  // Structural envelope packaging (Command ID 17 = System Set Time)
+  const rbpPacket = buildRbpRequest(17, timePayloadFields);
   const crcBytes = crc16ccitt(rbpPacket);
-  const rawPacketWithCrc = concat(rbpPacket, crcBytes);
+  const transportDataBlock = concat(rbpPacket, crcBytes);
 
-  log(`  Assembled Byte Payload (+CRC): ${hexStr(rawPacketWithCrc)}`, "info");
+  log(`  Assembled Struct Array (+CRC16): ${hexStr(transportDataBlock)}`, "info");
 
-  // Encrypt raw payload framework using the active Phase 2 session tracking key
-  const encryptedPayload = rc4(sessionKey, rawPacketWithCrc);
+  // Crypto Layer wrapper encoding
+  const encryptedTimePayload = rc4(sessionKey, transportDataBlock);
 
-  log("  Dispatched encrypted time frame across r_xfer to characteristic AA01...");
-  await xferSend(openChar, encryptedPayload);
+  log("  Writing secure packet configuration array across r_xfer to handle 0xAA01...");
+  await xferSend(openChar, encryptedTimePayload);
   
-  log("== [NEW CODE APPLIED] SUCCESS: Time packet successfully written to characteristic AA01 ==", "ok");
+  log("== [NEW CODE APPLIED] SUCCESS: Time synchronization protocol packet written to watch peripheral! ==", "ok");
 }
 
-// === Central Connection Pipeline Entry ===
 async function startBind() {
   document.getElementById('btnBind').disabled = true;
   logEl.innerHTML = '';
@@ -258,27 +217,47 @@ async function startBind() {
     log("Requesting HeyPlus W2100 BLE Device...", "info");
     const device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'HeyPlus W2100' }, { services: [SERVICE_RYEEX] }],
-      optionalServices: [SERVICE_MI, SERVICE_RYEEX]
+      optionalServices: [SERVICE_RYEEX]
     });
 
-    log("Connecting to GATT server...", "info");
+    log("Connecting to watch GATT interface...", "info");
     const server = await device.gatt.connect();
 
-    log("Discovering Ryeex custom pipeline services...", "info");
+    log("Locating custom BLE characteristics handles...", "info");
     const ryeexService = await server.getPrimaryService(SERVICE_RYEEX);
     const rc4Char = await ryeexService.getCharacteristic(CHAR_RYEEX_RC4);
     const openChar = await ryeexService.getCharacteristic(CHAR_RYEEX_OPEN);
 
-    log("Generating local cryptographic key signature arrays...", "info");
+    log("Initializing local cryptographic handshake structures...", "info");
     sessionKey = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
-    log("Crypto session initialized.", "ok");
+    log("Cryptographic engine active.", "ok");
 
-    log("\n=== PHASE 3: Bind Simulation (r_xfer) ===", "phase");
+    log("\n=== PHASE 3: Bind Verification Handshakes ===", "phase");
     
-    // 1. GetDevStatus (cmd=5)
+    // Step A: Device Status Mapping Query (Cmd 5)
     log("  GetDevStatus (cmd=5) -> AA01", "info");
     const devStatusPayload = new Uint8Array([0x08, 0x01, 0x10, 0x05, 0x18, 0x56, 0x22, 0x02, 0x08, 0x01]);
     const devStatusCrc = crc16ccitt(devStatusPayload);
     await xferSend(openChar, concat(devStatusPayload, devStatusCrc));
     await new Promise(r => setTimeout(r, 600));
 
+    // Step B: Handshake Execution Confirmation (Cmd 30)
+    log("  BindAckStart (cmd=30) -> AA01", "info");
+    const bindAckPayload = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]);
+    const bindAckCrc = crc16ccitt(bindAckPayload);
+    await xferSend(openChar, concat(bindAckPayload, bindAckCrc));
+    await new Promise(r => setTimeout(r, 600));
+
+    // RUN THE INJECTED TIME CONFIGURATION CORE
+    await runTimeSyncPipeline(openChar);
+
+    log("\n[Execution Sequence Finished]", "ok");
+  } catch (error) {
+    log("BLE Error Failure: " + error, "err");
+  } finally {
+    document.getElementById('btnBind').disabled = false;
+  }
+}
+</script>
+</body>
+</html>
