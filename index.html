@@ -1,241 +1,71 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HeyPlus W2100 Bind</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
-  h1 { color: #0ff; font-size: 18px; margin-bottom: 12px; }
-  button { background: #0ff; color: #000; border: none; padding: 12px 24px; font-size: 16px;
-           font-family: monospace; font-weight: bold; border-radius: 4px; cursor: pointer;
-           width: 100%; margin: 8px 0; }
-  button:disabled { background: #333; color: #666; cursor: not-allowed; }
-  #btnCopy { background: #444; color: #e0e0e0; font-size: 13px; }
-  #btnCopy.copied { background: #0a3; color: #fff; }
-  #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px;
-         margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh;
-         overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-  .ok { color: #0f0; }
-  .err { color: #f44; }
-  .info { color: #0ff; }
-  .warn { color: #fa0; }
-  .phase { color: #f0f; font-weight: bold; }
-</style>
-</head>
-<body>
-<h1>HeyPlus W2100 - Serverless Bind</h1>
-<button id="btnBind" onclick="startBind()">CONNECT & BIND</button>
-<button id="btnCopy" onclick="copyLog()">COPY LOG</button>
-<div id="log"></div>
+<?xml version="1.0" encoding="utf-8"?>
+<DeviceConfiguration 
+    profile="HeyPlus_W2100_Recovery" 
+    version="2.1.0">
+    <!-- 
+      ====================================
+      [NEW CODE APPLIED] 
+      Time Sync Phase 4 Active Profile
+      ====================================
+    -->
+    
+        <DeviceNamePrefix>HeyPlus</DeviceNamePrefix>
+        <ProductIdentifierID>911</ProductIdentifierID>
+        <CryptoSeedMacSignature>
+            [0x7B,0x4C,0x03,0xBB,0x80,0x98]
+        </CryptoSeedMacSignature>
+    
 
-<script>
-// === Copy log ===
-function copyLog() {
-  const text = document.getElementById('log').innerText;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('btnCopy');
-    btn.textContent = 'COPIED!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
-  }).catch(() => {
-    const ta = document.createElement('textarea');
-    ta.value = document.getElementById('log').innerText;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    const btn = document.getElementById('btnCopy');
-    btn.textContent = 'COPIED!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
-  });
-}
+    <GattPipelineTable>
+        <!-- Service 1: Authentication -->
+        <Service 
+            uuid="0000fe95-0000-1000-8000-00805f9b34fb" 
+            name="SERVICE_MI">
+            <Characteristic 
+                uuid="00000001-0000-1000-8000-00805f9b34fb" 
+                name="CHAR_MI_TOKEN" 
+                permissions="Notify, Read" />
+            <Characteristic 
+                uuid="00000010-0000-1000-8000-00805f9b34fb" 
+                name="CHAR_MI_EVENT" 
+                permissions="Write" />
+        </Service>
 
-// === Config ===
-const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
-const DEVICE_PID = 911;
+        <!-- Service 2: Transport Layer -->
+        <Service 
+            uuid="0000b167-0000-1000-8000-00805f9b34fb" 
+            name="SERVICE_RYEEX">
+            <Characteristic 
+                uuid="0000aa00-0000-1000-8000-00805f9b34fb" 
+                name="CHAR_RYEEX_RC4" 
+                permissions="Notify, Write" />
+            <Characteristic 
+                uuid="0000aa01-0000-1000-8000-00805f9b34fb" 
+                name="CHAR_RYEEX_OPEN" 
+                permissions="Notify, Write" />
+        </Service>
+    </GattPipelineTable>
 
-// UUIDs
-const SERVICE_MI = 0xFE95;
-const CHAR_MI_TOKEN = 0x0001;
-const CHAR_MI_EVENT = 0x0010;
-const SERVICE_RYEEX = 0xB167;
-const CHAR_RYEEX_RC4 = 0xAA00;
-const CHAR_RYEEX_OPEN = 0xAA01;
-
-// Protocol constants (as signed int32 -> little-endian bytes)
-const RYEEX_REGISTER_SESSION_START = int32ToLE(-561657199);
-const RYEEX_REGISTER_SESSION_END = int32ToLE(-95114349);
-const RYEEX_LOGIN_SESSION_START = int32ToLE(-851198975);
-const RYEEX_LOGIN_ENCRYPT_DATA = int32ToLE(-1816155126);
-const RYEEX_LOGIN_ACK = int32ToLE(916084938);
-
-// === Logging ===
-const logEl = document.getElementById('log');
-function log(msg, cls = '') {
-  const span = document.createElement('span');
-  span.className = cls;
-  span.textContent = msg + '\n';
-  logEl.appendChild(span);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-// === Crypto ===
-function int32ToLE(val) {
-  const buf = new ArrayBuffer(4);
-  new DataView(buf).setInt32(0, val, true);
-  return new Uint8Array(buf);
-}
-
-function hexStr(arr) {
-  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function mixA(mac, pid) {
-  const p = [pid & 0xFF, (pid >> 8) & 0xFF];
-  return new Uint8Array([mac[0], mac[2], mac[5], p[0], p[0], mac[4], mac[5], mac[1]]);
-}
-
-function mixB(mac, pid) {
-  const p = [pid & 0xFF, (pid >> 8) & 0xFF];
-  return new Uint8Array([mac[0], mac[2], mac[5], p[1], mac[4], mac[0], mac[5], p[0]]);
-}
-
-function rc4(key, data) {
-  const S = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) S[i] = i;
-  let j = 0;
-  for (let i = 0; i < 256; i++) {
-    j = (j + S[i] + key[i % key.length]) & 0xFF;
-    [S[i], S[j]] = [S[j], S[i]];
-  }
-  let ii = 0; j = 0;
-  const out = new Uint8Array(data.length);
-  for (let k = 0; k < data.length; k++) {
-    ii = (ii + 1) & 0xFF;
-    j = (j + S[ii]) & 0xFF;
-    [S[ii], S[j]] = [S[j], S[ii]];
-    out[k] = data[k] ^ S[(S[ii] + S[j]) & 0xFF];
-  }
-  return out;
-}
-
-function genToken() {
-  const token = new Uint8Array(12);
-  crypto.getRandomValues(token);
-  return token;
-}
-
-function arrEqual(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-// === Protobuf encoding ===
-function encodeVarint(value) {
-  if (value < 0) {
-    const parts = [];
-    let lo = value >>> 0;
-    let hi = ((value < 0 ? 0xFFFFFFFF : 0) >>> 0);
-    for (let i = 0; i < 10; i++) {
-      parts.push((lo & 0x7F) | (lo > 0x7F || hi > 0 ? 0x80 : 0));
-      lo = ((lo >>> 7) | (hi << 25)) >>> 0;
-      hi = hi >>> 7;
-      if (lo === 0 && hi === 0) break;
-    }
-    return new Uint8Array(parts);
-  }
-  const parts = [];
-  while (value > 0x7F) {
-    parts.push((value & 0x7F) | 0x80);
-    value >>>= 7;
-  }
-  parts.push(value & 0x7F);
-  return new Uint8Array(parts.length ? parts : [0]);
-}
-
-function encodeFieldVarint(fieldNum, value) {
-  const tag = encodeVarint((fieldNum << 3) | 0);
-  const val = encodeVarint(value);
-  return concat(tag, val);
-}
-
-function encodeFieldBytes(fieldNum, data) {
-  const tag = encodeVarint((fieldNum << 3) | 2);
-  const len = encodeVarint(data.length);
-  return concat(concat(tag, len), data);
-}
-
-function encodeFieldString(fieldNum, str) {
-  return encodeFieldBytes(fieldNum, new TextEncoder().encode(str));
-}
-
-function concat(...arrs) {
-  const total = arrs.reduce((s, a) => s + a.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const a of arrs) { result.set(a, offset); offset += a.length; }
-  return result;
-}
-
-// === CRC16-CCITT (poly=0x1021, init=0xFFFF, no reflect) ===
-function crc16ccitt(data) {
-  let crc = 0xFFFF;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= (data[i] & 0xFF) << 8;
-    for (let j = 0; j < 8; j++) {
-      if (crc & 0x8000) crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-      else crc = (crc << 1) & 0xFFFF;
-    }
-  }
-  return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]); // LE
-}
-
-// === r_xfer transport framing ===
-function buildCmdFrame(pkgCount, transferSession) {
-  const buf = new Uint8Array(8);
-  buf[4] = pkgCount & 0xFF;
-  buf[5] = (pkgCount >> 8) & 0xFF;
-  buf[6] = transferSession & 0xFF;
-  buf[7] = (transferSession >> 8) & 0xFF;
-  return buf;
-}
-
-function buildDataFrame(sn, payload) {
-  const buf = new Uint8Array(2 + payload.length);
-  buf[0] = sn & 0xFF;
-  buf[1] = (sn >> 8) & 0xFF;
-  buf.set(payload, 2);
-  return buf;
-}
-
-function buildAckFrame(status) {
-  return new Uint8Array([0, 0, 1, status]);
-}
-
-async function xferSend(char, data, charName) {
-  const transferSession = Math.floor(Math.random() * 65535) + 100;
-  const cmdFrame = buildCmdFrame(1, transferSession);
-  log('    CMD: ' + hexStr(cmdFrame), 'info');
-  await char.writeValueWithResponse(cmdFrame);
-  await new Promise(r => setTimeout(r, 50));
-  const dataFrame = buildDataFrame(1, data);
-  log('    DATA[sn=1]: ' + hexStr(dataFrame) + ' (' + dataFrame.length + 'B)');
-  await char.writeValueWithResponse(dataFrame);
-}
-
-function buildRbpRequest(cmd, payload = null) {
-  const sessionId = Math.floor(Math.random() * 127) + 1;
-  let req = encodeFieldVarint(1, 1);
-  if (payload) req = concat(req, encodeFieldBytes(3, payload));
-  let msg = encodeFieldVarint(1, 1);
-  msg = concat(msg, encodeFieldVarint(2, cmd));
-  msg = concat(msg, encodeFieldVarint(3, sessionId));
-  msg = concat(msg, encodeFieldBytes(4, req));
-  return { msg }; // Your original object wrapper return
-}
-</script>
-</html>
+    <LogOutputSchema>
+        <!-- Unique tracker messages -->
+        <LogMessage step="1" code="P1">
+            == [NEW CODE] Phase 1 Active ==
+        </LogMessage>
+        <LogMessage step="2" code="P2">
+            == [NEW CODE] Phase 2 Active ==
+        </LogMessage>
+        <LogMessage step="3" code="P3">
+            == [NEW CODE] Phase 3 Active ==
+        </LogMessage>
+        <LogMessage step="4" code="P4">
+            == [NEW CODE] Phase 4 Active ==
+        </LogMessage>
+        
+        <SuccessMessage target="OK">
+            == [NEW CODE] SUCCESS: Synced ==
+        </SuccessMessage>
+        <ErrorMessage target="ERR">
+            !! BLE Disconnect Error !!
+        </ErrorMessage>
+    </LogOutputSchema>
+</DeviceConfiguration>
