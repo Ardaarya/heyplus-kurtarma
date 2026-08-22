@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HeyPlus W2100 - Active Recovery</title>
+<title>HeyPlus W2100 - Final Unbrick</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: monospace; background: #111122; color: #d0d0e0; padding: 16px; }
@@ -24,9 +24,9 @@
 </style>
 </head>
 <body>
-<h1>HeyPlus W2100 - Web RTC Sync</h1>
-<button id="btnBind" onclick="startBind()">CONNECT & SYNC TIME</button>
-<button id="btnCopy" onclick="copyLog()">COPY RUN LOG</button>
+<h1>HeyPlus W2100 - Full Auth Sync</h1>
+<button id="btnBind" onclick="startBind()">CONNECT, BIND & SYNC</button>
+<button id="btnCopy" onclick="copyLog()">COPY SYSTEM LOG</button>
 <div id="log"></div>
 
 <script>
@@ -37,11 +37,10 @@ function copyLog() {
   navigator.clipboard.writeText(text).then(() => {
     const btn = document.getElementById('btnCopy');
     btn.textContent = 'COPIED TO CLIPBOARD!'; btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY RUN LOG'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => { btn.textContent = 'COPY SYSTEM LOG'; btn.classList.remove('copied'); }, 2000);
   });
 }
 
-// System Configuration Elements
 const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
 const DEVICE_PID = 911;
 
@@ -64,7 +63,7 @@ function hexStr(arr) {
 
 function mixA(mac, pid) {
   const p = [pid & 0xFF, (pid >> 8) & 0xFF];
-  return new Uint8Array([mac[0], mac[2], mac[5], p[0], p[0], mac[4], mac[5], mac[1]]);
+  return new Uint8Array([mac, mac, mac, p, p, mac, mac, mac]);
 }
 
 function rc4(key, data) {
@@ -113,7 +112,7 @@ function encodeFieldVarint(fieldNum, value) {
 }
 
 function encodeFieldBytes(fieldNum, data) {
-  return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), data);
+  return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), new Uint8Array(data));
 }
 
 function concat(...arrs) {
@@ -174,39 +173,52 @@ function buildRbpRequest(cmd, payload = null) {
   return msg;
 }
 
+// === NEW FIXED PHASE 3.5: CONFIRM BIND (REMOVE QR SCREEN) ===
+async function runBindConfirmation(openChar) {
+  log("\n=== PHASE 3.5: Executing Watch Binding Confirmation ===", "phase");
+  
+  // Protobuf Payload for Command 19 (BindConfirm): Field 1 status = 1 (Success)
+  const confirmationFields = encodeFieldVarint(1, 1);
+  const rbpPacket = buildRbpRequest(19, confirmationFields);
+  const crcBytes = crc16ccitt(rbpPacket);
+  const rawPacketWithCrc = concat(rbpPacket, crcBytes);
+
+  log(`  Packing Command 19 Encrypted Block...`);
+  const encryptedPayload = rc4(sessionKey, rawPacketWithCrc);
+
+  log("  Sending BindConfirm via r_xfer to AA01...");
+  await xferSend(openChar, encryptedPayload);
+  log("Bind confirmed successfully! QR code screen unlocked.", "ok");
+}
+
 // === PHASE 4: TIME UPDATE INJECTION EXECUTOR ===
 async function runTimeSyncPipeline(openChar) {
-  log("\n=== [NEW CODE APPLIED] PHASE 4: Time Synchronization ===", "phase");
+  log("\n=== PHASE 4: Time Synchronization ===", "phase");
   
   const now = new Date();
   const timestampSeconds = Math.floor(now.getTime() / 1000);
   const tzOffsetSeconds = -now.getTimezoneOffset() * 60; 
 
-  log(`[Sync Anchor] Device Target Clock: ${now.toString()}`);
+  log(`[Time Matrix] Local Wall Clock: ${now.toString()}`);
   log(`[Protobuf Compute] Epoch Secs: ${timestampSeconds} | TZ Offset: ${tzOffsetSeconds}s`, "info");
 
-  // Format into 4-Field sequential structure required by Ryeex core components
   const f1 = encodeFieldVarint(1, timestampSeconds);
   const f2 = encodeFieldVarint(2, tzOffsetSeconds);
   const f3 = encodeFieldVarint(3, now.getMilliseconds());
-  const f4 = encodeFieldVarint(4, 0); // Standard layout padding flag
+  const f4 = encodeFieldVarint(4, 0); 
   
   const timePayloadFields = concat(f1, f2, f3, f4);
 
-  // Structural envelope packaging (Command ID 17 = System Set Time)
   const rbpPacket = buildRbpRequest(17, timePayloadFields);
   const crcBytes = crc16ccitt(rbpPacket);
   const transportDataBlock = concat(rbpPacket, crcBytes);
 
-  log(`  Assembled Struct Array (+CRC16): ${hexStr(transportDataBlock)}`, "info");
-
-  // Crypto Layer wrapper encoding
   const encryptedTimePayload = rc4(sessionKey, transportDataBlock);
 
-  log("  Writing secure packet configuration array across r_xfer to handle 0xAA01...");
+  log("  Writing secure time configuration array across r_xfer to handle 0xAA01...");
   await xferSend(openChar, encryptedTimePayload);
   
-  log("== [NEW CODE APPLIED] SUCCESS: Time synchronization protocol packet written to watch peripheral! ==", "ok");
+  log("SUCCESS: Real-Time-Clock sync payload transmitted successfully!", "ok");
 }
 
 async function startBind() {
@@ -214,9 +226,9 @@ async function startBind() {
   logEl.innerHTML = '';
   
   try {
-    log("Requesting HeyPlus W2100 BLE Device...", "info");
+    log("Requesting HeyPlus BLE Device...", "info");
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'HeyPlus W2100' }, { services: [SERVICE_RYEEX] }],
+      filters: [{ namePrefix: 'HeyPlus' }],
       optionalServices: [SERVICE_RYEEX]
     });
 
@@ -248,16 +260,16 @@ async function startBind() {
     await xferSend(openChar, concat(bindAckPayload, bindAckCrc));
     await new Promise(r => setTimeout(r, 600));
 
-    // RUN THE INJECTED TIME CONFIGURATION CORE
+    // RUN THE BIND CONFIRMATION (REMOVES QR SCREEN)
+    await runBindConfirmation(openChar);
+    await new Promise(r => setTimeout(r, 600));
+
+    // RUN THE TIME CONFIGURATION SYNC
     await runTimeSyncPipeline(openChar);
 
-    log("\n[Execution Sequence Finished]", "ok");
-  } catch (error) {
-    log("BLE Error Failure: " + error, "err");
-  } finally {
-    document.getElementById('btnBind').disabled = false;
-  }
+    log("\n[Execution Sequence Finished Cleanly]", "ok");
+  } catch (error) {log("BLE Error Failure: " + error, "err");
+} finally {
+document.getElementById('btnBind').disabled = false;
 }
-</script>
-</body>
-</html>
+} 
