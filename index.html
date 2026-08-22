@@ -3,47 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HeyPlus W2100 - Final Unbrick</title>
+<title>HeyPlus W2100 - Full Auth</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #111122; color: #d0d0e0; padding: 16px; }
-  h1 { color: #00ffff; font-size: 16px; margin-bottom: 12px; letter-spacing: 0.5px; }
-  button { background: #00ffff; color: #000; border: none; padding: 14px 20px; font-size: 15px;
-           font-family: monospace; font-weight: bold; border-radius: 6px; cursor: pointer;
-           width: 100%; margin: 6px 0; box-shadow: 0 4px 10px rgba(0,255,255,0.2); }
-  button:disabled { background: #222; color: #555; cursor: not-allowed; box-shadow: none; }
-  #btnCopy { background: #333; color: #ccc; font-size: 12px; margin-top: 4px; }
-  #btnCopy.copied { background: #00aa55; color: #fff; }
-  #log { background: #080812; border: 1px solid #222; border-radius: 6px; padding: 14px;
-         margin-top: 14px; font-size: 11px; line-height: 1.5; max-height: 65vh;
-         overflow-y: auto; white-space: pre-wrap; word-break: break-all; color: #aaa; }
-  .ok { color: #00ff66; font-weight: bold; }
-  .err { color: #ff3344; }
-  .info { color: #00ffff; }
-  .phase { color: #ff00ff; font-weight: bold; border-bottom: 1px dashed #ff00ff; padding-bottom: 2px; }
+  body { font-family: monospace; background: #111; color: #eee; padding: 16px; }
+  h1 { color: #0ff; font-size: 16px; margin-bottom: 12px; }
+  button { background: #0ff; color: #000; border: none; padding: 14px 20px; 
+           font-size: 15px; font-family: monospace; font-weight: bold; 
+           border-radius: 6px; cursor: pointer; width: 100%; margin: 6px 0; }
+  button:disabled { background: #222; color: #555; }
+  #log { background: #000; border: 1px solid #222; border-radius: 6px; 
+         padding: 14px; margin-top: 14px; font-size: 11px; line-height: 1.5; 
+         max-height: 60vh; overflow-y: auto; white-space: pre-wrap; 
+         word-break: break-all; color: #aaa; }
+  .ok { color: #0f6; font-weight: bold; }
+  .err { color: #f34; }
+  .info { color: #0ff; }
+  .phase { color: #f0f; font-weight: bold; }
 </style>
 </head>
 <body>
 <h1>HeyPlus W2100 - Full Auth Sync</h1>
-<button id="btnBind" onclick="startBind()">CONNECT, BIND & SYNC</button>
-<button id="btnCopy" onclick="copyLog()">COPY SYSTEM LOG</button>
+<button id="btnBind" onclick="startBind()">CONNECT & UNLOCK</button>
 <div id="log"></div>
-
 <script>
 let sessionKey = null;
-
-function copyLog() {
-  const text = document.getElementById('log').innerText;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('btnCopy');
-    btn.textContent = 'COPIED TO CLIPBOARD!'; btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'COPY SYSTEM LOG'; btn.classList.remove('copied'); }, 2000);
-  });
-}
-
+let challengeResolver = null;
 const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
 const DEVICE_PID = 911;
 
+const SERVICE_MI = '0000fe95-0000-1000-8000-00805f9b34fb';
+const CHAR_MI_TOKEN = '00000001-0000-1000-8000-00805f9b34fb';
+const CHAR_MI_EVENT = '00000010-0000-1000-8000-00805f9b34fb';
 const SERVICE_RYEEX = '0000b167-0000-1000-8000-00805f9b34fb';
 const CHAR_RYEEX_RC4 = '0000aa00-0000-1000-8000-00805f9b34fb';
 const CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
@@ -51,225 +42,144 @@ const CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
 const logEl = document.getElementById('log');
 function log(msg, cls = '') {
   const span = document.createElement('span');
-  span.className = cls;
-  span.textContent = msg + '\n';
-  logEl.appendChild(span);
-  logEl.scrollTop = logEl.scrollHeight;
+  span.className = cls; span.textContent = msg + '\n';
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
 }
-
 function hexStr(arr) {
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-
 function mixA(mac, pid) {
   const p = [pid & 0xFF, (pid >> 8) & 0xFF];
-  return new Uint8Array([mac, mac, mac, p, p, mac, mac, mac]);
+  return new Uint8Array([mac[0], mac[2], mac[5], p[0], p[0], mac[4], mac[5], mac[1]]);
 }
-
 function rc4(key, data) {
-  const S = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) S[i] = i;
-  let j = 0;
-  for (let i = 0; i < 256; i++) {
-    j = (j + S[i] + key[i % key.length]) & 0xFF;
-    [S[i], S[j]] = [S[j], S[i]];
+  const S = new Uint8Array(256); for (let i = 0; i < 256; i++) S[i] = i;
+  let j = 0; for (let i = 0; i < 256; i++) {
+    j = (j + S[i] + key[i % key.length]) & 0xFF; [S[i], S[j]] = [S[j], S[i]];
   }
-  let ii = 0; j = 0;
-  const out = new Uint8Array(data.length);
+  let ii = 0; j = 0; const out = new Uint8Array(data.length);
   for (let k = 0; k < data.length; k++) {
-    ii = (ii + 1) & 0xFF;
-    j = (j + S[ii]) & 0xFF;
-    [S[ii], S[j]] = [S[j], S[ii]];
+    ii = (ii + 1) & 0xFF; j = (j + S[ii]) & 0xFF; [S[ii], S[j]] = [S[j], S[ii]];
     out[k] = data[k] ^ S[(S[ii] + S[j]) & 0xFF];
   }
   return out;
 }
-
-function encodeVarint(value) {
-  if (value < 0) {
-    const parts = [];
-    let lo = value >>> 0;
-    let hi = ((value < 0 ? 0xFFFFFFFF : 0) >>> 0);
+function encodeVarint(val) {
+  const parts = [];
+  if (val < 0) {
+    let lo = val >>> 0, hi = 0xFFFFFFFF >>> 0;
     for (let i = 0; i < 10; i++) {
       parts.push((lo & 0x7F) | (lo > 0x7F || hi > 0 ? 0x80 : 0));
-      lo = ((lo >>> 7) | (hi << 25)) >>> 0;
-      hi = hi >>> 7;
-      if (lo === 0 && hi === 0) break;
+      lo = ((lo >>> 7) | (hi << 25)) >>> 0; hi = hi >>> 7;
     }
     return new Uint8Array(parts);
   }
-  const parts = [];
-  while (value > 0x7F) {
-    parts.push((value & 0x7F) | 0x80);
-    value >>>= 7;
-  }
-  parts.push(value & 0x7F);
-  return new Uint8Array(parts);
+  while (val > 0x7F) { parts.push((val & 0x7F) | 0x80); val >>>= 7; }
+  parts.push(val & 0x7F); return new Uint8Array(parts);
 }
-
-function encodeFieldVarint(fieldNum, value) {
-  return concat(encodeVarint((fieldNum << 3) | 0), encodeVarint(value));
+function encodeFieldVarint(fNum, val) {
+  return concat(encodeVarint((fNum << 3) | 0), encodeVarint(val));
 }
-
-function encodeFieldBytes(fieldNum, data) {
-  return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), new Uint8Array(data));
+function encodeFieldBytes(fNum, data) {
+  return concat(concat(encodeVarint((fNum << 3) | 2), encodeVarint(data.length)), new Uint8Array(data));
 }
-
 function concat(...arrs) {
   const total = arrs.reduce((s, a) => s + a.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const a of arrs) { result.set(a, offset); offset += a.length; }
-  return result;
+  const res = new Uint8Array(total); let off = 0;
+  for (const a of arrs) { res.set(a, off); off += a.length; } return res;
 }
-
 function crc16ccitt(data) {
-  let crc = 0xFFFF;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= (data[i] & 0xFF) << 8;
-    for (let j = 0; j < 8; j++) {
-      if (crc & 0x8000) crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-      else crc = (crc << 1) & 0xFFFF;
+  let crc = 0xFFFF; for (let i = 0; i < data.length; i++) {
+    crc ^= (data[i] & 0xFF) << 8; for (let j = 0; j < 8; j++) {
+      if (crc & 0x8000) crc = ((crc << 1) ^ 0x1021) & 0xFFFF; else crc = (crc << 1) & 0xFFFF;
     }
   }
   return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
 }
-
-function buildCmdFrame(pkgCount, transferSession) {
+function buildCmdFrame(pCount, sId) {
   const buf = new Uint8Array(8);
-  buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF;
-  buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF;
-  return buf;
+  buf[4] = pCount & 0xFF; buf[5] = (pCount >> 8) & 0xFF;
+  buf[6] = sId & 0xFF; buf[7] = (sId >> 8) & 0xFF; return buf;
 }
-
 function buildDataFrame(sn, payload) {
   const buf = new Uint8Array(2 + payload.length);
-  buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF;
-  buf.set(payload, 2);
-  return buf;
+  buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF; buf.set(payload, 2); return buf;
 }
-
 async function xferSend(char, data) {
-  const transferSession = Math.floor(Math.random() * 65535) + 100;
-  const cmdFrame = buildCmdFrame(1, transferSession);
-  log('    CMD: ' + hexStr(cmdFrame), 'info');
-  await char.writeValueWithResponse(cmdFrame);
+  const sess = Math.floor(Math.random() * 65535) + 100;
+  const cmd = buildCmdFrame(1, sess); await char.writeValueWithResponse(cmd);
   await new Promise(r => setTimeout(r, 60));
-
-  const dataFrame = buildDataFrame(1, data);
-  log('    DATA[sn=1]: ' + hexStr(dataFrame) + ' (' + dataFrame.length + 'B)');
-  await char.writeValueWithResponse(dataFrame);
+  const df = buildDataFrame(1, data); await char.writeValueWithResponse(df);
 }
-
 function buildRbpRequest(cmd, payload = null) {
-  const sessionId = Math.floor(Math.random() * 127) + 1;
-  let req = encodeFieldVarint(1, 1); 
-  if (payload) req = concat(req, encodeFieldBytes(3, payload)); 
-
-  let msg = encodeFieldVarint(1, 1);           
-  msg = concat(msg, encodeFieldVarint(2, cmd)); 
-  msg = concat(msg, encodeFieldVarint(3, sessionId)); 
-  msg = concat(msg, encodeFieldBytes(4, req));  
+  const sId = Math.floor(Math.random() * 127) + 1;
+  let req = encodeFieldVarint(1, 1); if (payload) req = concat(req, encodeFieldBytes(3, payload));
+  let msg = encodeFieldVarint(1, 1); msg = concat(msg, encodeFieldVarint(2, cmd));
+  msg = concat(msg, encodeFieldVarint(3, sId)); msg = concat(msg, encodeFieldBytes(4, req));
   return msg;
 }
-
-// === NEW FIXED PHASE 3.5: CONFIRM BIND (REMOVE QR SCREEN) ===
-async function runBindConfirmation(openChar) {
-  log("\n=== PHASE 3.5: Executing Watch Binding Confirmation ===", "phase");
-  
-  // Protobuf Payload for Command 19 (BindConfirm): Field 1 status = 1 (Success)
-  const confirmationFields = encodeFieldVarint(1, 1);
-  const rbpPacket = buildRbpRequest(19, confirmationFields);
-  const crcBytes = crc16ccitt(rbpPacket);
-  const rawPacketWithCrc = concat(rbpPacket, crcBytes);
-
-  log(`  Packing Command 19 Encrypted Block...`);
-  const encryptedPayload = rc4(sessionKey, rawPacketWithCrc);
-
-  log("  Sending BindConfirm via r_xfer to AA01...");
-  await xferSend(openChar, encryptedPayload);
-  log("Bind confirmed successfully! QR code screen unlocked.", "ok");
+function handleMiNotification(e) {
+  const v = new Uint8Array(e.target.value.buffer);
+  if (challengeResolver && v.length >= 4) challengeResolver(v);
 }
-
-// === PHASE 4: TIME UPDATE INJECTION EXECUTOR ===
-async function runTimeSyncPipeline(openChar) {
-  log("\n=== PHASE 4: Time Synchronization ===", "phase");
-  
-  const now = new Date();
-  const timestampSeconds = Math.floor(now.getTime() / 1000);
-  const tzOffsetSeconds = -now.getTimezoneOffset() * 60; 
-
-  log(`[Time Matrix] Local Wall Clock: ${now.toString()}`);
-  log(`[Protobuf Compute] Epoch Secs: ${timestampSeconds} | TZ Offset: ${tzOffsetSeconds}s`, "info");
-
-  const f1 = encodeFieldVarint(1, timestampSeconds);
-  const f2 = encodeFieldVarint(2, tzOffsetSeconds);
-  const f3 = encodeFieldVarint(3, now.getMilliseconds());
-  const f4 = encodeFieldVarint(4, 0); 
-  
-  const timePayloadFields = concat(f1, f2, f3, f4);
-
-  const rbpPacket = buildRbpRequest(17, timePayloadFields);
-  const crcBytes = crc16ccitt(rbpPacket);
-  const transportDataBlock = concat(rbpPacket, crcBytes);
-
-  const encryptedTimePayload = rc4(sessionKey, transportDataBlock);
-
-  log("  Writing secure time configuration array across r_xfer to handle 0xAA01...");
-  await xferSend(openChar, encryptedTimePayload);
-  
-  log("SUCCESS: Real-Time-Clock sync payload transmitted successfully!", "ok");
-}
-
 async function startBind() {
-  document.getElementById('btnBind').disabled = true;
-  logEl.innerHTML = '';
-  
+  document.getElementById('btnBind').disabled = true; logEl.innerHTML = '';
   try {
-    log("Requesting HeyPlus BLE Device...", "info");
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'HeyPlus' }],
-      optionalServices: [SERVICE_RYEEX]
+    log("Connecting BLE...", "info");
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'HeyPlus' }], optionalServices: [SERVICE_MI, SERVICE_RYEEX]
     });
+    const srv = await dev.gatt.connect();
+    const miSrv = await srv.getPrimaryService(SERVICE_MI);
+    const tCh = await miSrv.getCharacteristic(CHAR_MI_TOKEN);
+    const eCh = await miSrv.getCharacteristic(CHAR_MI_EVENT);
+    const rySrv = await srv.getPrimaryService(SERVICE_RYEEX);
+    const oCh = await rySrv.getCharacteristic(CHAR_RYEEX_OPEN);
 
-    log("Connecting to watch GATT interface...", "info");
-    const server = await device.gatt.connect();
-
-    log("Locating custom BLE characteristics handles...", "info");
-    const ryeexService = await server.getPrimaryService(SERVICE_RYEEX);
-    const rc4Char = await ryeexService.getCharacteristic(CHAR_RYEEX_RC4);
-    const openChar = await ryeexService.getCharacteristic(CHAR_RYEEX_OPEN);
-
-    log("Initializing local cryptographic handshake structures...", "info");
     sessionKey = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
-    log("Cryptographic engine active.", "ok");
 
-    log("\n=== PHASE 3: Bind Verification Handshakes ===", "phase");
-    
-    // Step A: Device Status Mapping Query (Cmd 5)
-    log("  GetDevStatus (cmd=5) -> AA01", "info");
-    const devStatusPayload = new Uint8Array([0x08, 0x01, 0x10, 0x05, 0x18, 0x56, 0x22, 0x02, 0x08, 0x01]);
-    const devStatusCrc = crc16ccitt(devStatusPayload);
-    await xferSend(openChar, concat(devStatusPayload, devStatusCrc));
+    log("\n=== PHASE 1: Token Exchange ===", "phase");
+    await tCh.startNotifications();
+    tCh.addEventListener('characteristicvaluechanged', handleMiNotification);
+    await eCh.writeValueWithResponse(new Uint8Array([0x91, 0xca, 0x85, 0xde]));
+    await tCh.writeValueWithResponse(new Uint8Array([0xfa, 0xbb, 0x5c, 0x75, 0x70, 0xad, 0x31, 0x5e, 0xe4, 0x61, 0x83, 0x45]));
+    await new Promise(r => setTimeout(r, 500));
+    await tCh.writeValueWithResponse(new Uint8Array([0x12, 0xba, 0x9d, 0x2a]));
+
+    log("\n=== PHASE 2: Challenge Authentication ===", "phase");
+    const challengePromise = new Promise(res => { challengeResolver = res; });
+    await eCh.writeValueWithResponse(new Uint8Array([0x01, 0xbc, 0x43, 0xcd]));
+    const rawChallenge = await challengePromise;
+    log(`  Challenge Received: ${hexStr(rawChallenge)}`, "ok");
+
+    const answer = rc4(sessionKey, rawChallenge);
+    await tCh.writeValueWithResponse(answer);
+    await new Promise(r => setTimeout(r, 500));
+
+    log("\n=== PHASE 3: Base Verification ===", "phase");
+    const p5 = new Uint8Array([0x08, 0x01, 0x10, 0x05, 0x18, 0x56, 0x22, 0x02, 0x08, 0x01]);
+    await xferSend(oCh, concat(p5, crc16ccitt(p5))); await new Promise(r => setTimeout(r, 600));
+    const p30 = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]);
+    await xferSend(oCh, concat(p30, crc16ccitt(p30))); await new Promise(r => setTimeout(r, 600));
+
+    log("\n=== PHASE 3.5: Unlock QR Screen ===", "phase");
+    const confirm = buildRbpRequest(19, encodeFieldVarint(1, 1));
+    await xferSend(oCh, rc4(sessionKey, concat(confirm, crc16ccitt(confirm))));
     await new Promise(r => setTimeout(r, 600));
 
-    // Step B: Handshake Execution Confirmation (Cmd 30)
-    log("  BindAckStart (cmd=30) -> AA01", "info");
-    const bindAckPayload = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]);
-    const bindAckCrc = crc16ccitt(bindAckPayload);
-    await xferSend(openChar, concat(bindAckPayload, bindAckCrc));
-    await new Promise(r => setTimeout(r, 600));
+    log("\n=== PHASE 4: Clock Update Synchronization ===", "phase");
+    const now = new Date();
+    const sec = Math.floor(now.getTime() / 1000);
+    const off = -now.getTimezoneOffset() * 60;
+    const tFields = concat(encodeFieldVarint(1, sec), encodeFieldVarint(2, off), encodeFieldVarint(3, now.getMilliseconds()), encodeFieldVarint(4, 0));
+    const rtc = buildRbpRequest(17, tFields);
+    await xferSend(oCh, rc4(sessionKey, concat(rtc, crc16ccitt(rtc))));
 
-    // RUN THE BIND CONFIRMATION (REMOVES QR SCREEN)
-    await runBindConfirmation(openChar);
-    await new Promise(r => setTimeout(r, 600));
-
-    // RUN THE TIME CONFIGURATION SYNC
-    await runTimeSyncPipeline(openChar);
-
-    log("\n[Execution Sequence Finished Cleanly]", "ok");
-  } catch (error) {log("BLE Error Failure: " + error, "err");
-} finally {
-document.getElementById('btnBind').disabled = false;
+    log("\n== SUCCESS: Watch Unlocked & Time Synced! ==", "ok");
+  } catch (err) { log("Error: " + err, "err"); }
+  finally { document.getElementById('btnBind').disabled = false; }
 }
-} 
+</script>
+definitely inside
+</html>
+
