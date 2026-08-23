@@ -1,66 +1,124 @@
-<!DOCTYPE html><html><head><meta charset="utf-8">
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HeyPlus Bind</title><style>
+<title>HeyPlus W2100 Bind</title>
+<style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
   h1 { color: #0ff; font-size: 18px; margin-bottom: 12px; }
   button { background: #0ff; color: #000; border: none; padding: 12px 24px; font-size: 16px;
-           font-family: monospace; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
-  button:disabled { background: #333; color: #666; }
+           font-family: monospace; font-weight: bold; border-radius: 4px; cursor: pointer;
+           width: 100%; margin: 8px 0; }
+  button:disabled { background: #333; color: #666; cursor: not-allowed; }
+  #btnCopy { background: #444; color: #e0e0e0; font-size: 13px; }
+  #btnCopy.copied { background: #0a3; color: #fff; }
   #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px;
          margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh;
          overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-  .ok { color: #0f0; } .err { color: #f44; } .info { color: #0ff; } .phase { color: #f0f; font-weight: bold; }
-</style></head><body>
+  .ok { color: #0f0; }
+  .err { color: #f44; }
+  .info { color: #0ff; }
+  .warn { color: #fa0; }
+  .phase { color: #f0f; font-weight: bold; }
+</style>
+</head>
+<body>
 <h1>HeyPlus W2100 - Serverless Bind</h1>
-<button id="btnBind" onclick="startBind()">CONNECT & BIND</button><div id="log"></div>
+<button id="btnBind" onclick="startBind()">CONNECT & BIND</button>
+<button id="btnCopy" onclick="copyLog()">COPY LOG</button>
+<div id="log"></div>
+
 <script>
-let sessionKey = null, challengeResolver = null;
-const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98], DEVICE_PID = 911;
-const SERVICE_MI = '0000fe95-0000-1000-8000-00805f9b34fb', CHAR_MI_TOKEN = '00000001-0000-1000-8000-00805f9b34fb', CHAR_MI_EVENT = '00000010-0000-1000-8000-00805f9b34fb';
-const SERVICE_RYEEX = '0000b167-0000-1000-8000-00805f9b34fb', CHAR_RYEEX_RC4 = '0000aa00-0000-1000-8000-00805f9b34fb', CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
+function copyLog() {
+  const text = document.getElementById('log').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnCopy');
+    btn.textContent = 'COPIED!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
+const DEVICE_PID = 911;
+
+const SERVICE_MI = '0000fe95-0000-1000-8000-00805f9b34fb';
+const CHAR_MI_TOKEN = '00000001-0000-1000-8000-00805f9b34fb';
+const CHAR_MI_EVENT = '00000010-0000-1000-8000-00805f9b34fb';
+const SERVICE_RYEEX = '0000b167-0000-1000-8000-00805f9b34fb';
+const CHAR_RYEEX_RC4 = '0000aa00-0000-1000-8000-00805f9b34fb';
+const CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
+
+let sessionKey = null;
+let challengeResolver = null;
 
 const logEl = document.getElementById('log');
-function log(msg, cls = '') { const span = document.createElement('span'); span.className = cls; span.textContent = msg + '\n'; logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight; }
+function log(msg, cls = '') {
+  const span = document.createElement('span'); span.className = cls;
+  span.textContent = msg + '\n'; logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+
 function hexStr(arr) { return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join(''); }
 function mixA(mac, pid) { const p = [pid & 0xFF, (pid >> 8) & 0xFF]; return new Uint8Array([mac, mac, mac, p, p, mac, mac, mac]); }
+
 function rc4(key, data) {
   const S = new Uint8Array(256); for (let i = 0; i < 256; i++) S[i] = i;
   let j = 0; for (let i = 0; i < 256; i++) { j = (j + S[i] + key[i % key.length]) & 0xFF; [S[i], S[j]] = [S[j], S[i]]; }
   let ii = 0; j = 0; const out = new Uint8Array(data.length);
-  for (let k = 0; k < data.length; k++) { ii = (ii + 1) & 0xFF; j = (j + S[ii]) & 0xFF; [S[ii], S[j]] = [S[j], S[ii]]; out[k] = data[k] ^ S[(S[ii] + S[j]) & 0xFF]; } return out;
+  for (let k = 0; k < data.length; k++) { ii = (ii + 1) & 0xFF; j = (j + S[ii]) & 0xFF; [S[ii], S[j]] = [S[j], S[ii]]; out[k] = data[k] ^ S[(S[ii] + S[j]) & 0xFF]; }
+  return out;
 }
+
 function encodeVarint(value) {
   if (value < 0) {
     const parts = []; let lo = value >>> 0, hi = 0xFFFFFFFF >>> 0;
-    for (let i = 0; i < 10; i++) { parts.push((lo & 0x7F) | (lo > 0x7F || hi > 0 ? 0x80 : 0)); lo = ((lo >>> 7) | (hi << 25)) >>> 0; hi = hi >>> 7; } return new Uint8Array(parts);
+    for (let i = 0; i < 10; i++) { parts.push((lo & 0x7F) | (lo > 0x7F || hi > 0 ? 0x80 : 0)); lo = ((lo >>> 7) | (hi << 25)) >>> 0; hi = hi >>> 7; }
+    return new Uint8Array(parts);
   }
-  const parts = []; while (value > 0x7F) { parts.push((value & 0x7F) | 0x80); value >>>= 7; } parts.push(value & 0x7F); return new Uint8Array(parts);
+  const parts = []; while (value > 0x7F) { parts.push((value & 0x7F) | 0x80); value >>>= 7; }
+  parts.push(value & 0x7F); return new Uint8Array(parts);
 }
+
 function encodeFieldVarint(fieldNum, value) { return concat(encodeVarint((fieldNum << 3) | 0), encodeVarint(value)); }
-function encodeFieldBytes(fieldNum, data) { return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), new Uint8Array(data)); }
-function concat(...arrs) { const total = arrs.reduce((s, a) => s + a.length, 0), result = new Uint8Array(total); let offset = 0; for (const a of arrs) { result.set(a, offset); offset += a.length; } return result; }
-function crc16ccitt(data) {
-  let crc = 0xFFFF; for (let i = 0; i < data.length; i++) { crc ^= (data[i] & 0xFF) << 8; for (let j = 0; j < 8; j++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF; } return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
+if (typeof fieldNum !== 'undefined') { var encodeFieldBytes = function(fieldNum, data) { return concat(concat(encodeVarint((fieldNum << 3) | 2), encodeVarint(data.length)), new Uint8Array(data)); }; }
+
+function concat(...arrs) {
+  const total = arrs.reduce((s, a) => s + a.length, 0), result = new Uint8Array(total);
+  let offset = 0; for (const a of arrs) { result.set(a, offset); offset += a.length; } return result;
 }
+
+function crc16ccitt(data) {
+  let crc = 0xFFFF; for (let i = 0; i < data.length; i++) { crc ^= (data[i] & 0xFF) << 8; for (let j = 0; j < 8; j++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF; }
+  return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
+}
+
 function buildCmdFrame(pkgCount, transferSession) { const buf = new Uint8Array(8); buf = pkgCount & 0xFF; buf = (pkgCount >> 8) & 0xFF; buf = transferSession & 0xFF; buf = (transferSession >> 8) & 0xFF; return buf; }
 function buildDataFrame(sn, payload) { const buf = new Uint8Array(2 + payload.length); buf = sn & 0xFF; buf = (sn >> 8) & 0xFF; buf.set(payload, 2); return buf; }
+
 async function xferSend(char, data) {
   const transferSession = Math.floor(Math.random() * 65535) + 100, cmdFrame = buildCmdFrame(1, transferSession); await char.writeValueWithResponse(cmdFrame); await new Promise(r => setTimeout(r, 60));
   const dataFrame = buildDataFrame(1, data); await char.writeValueWithResponse(dataFrame);
 }
+
 function buildRbpRequest(cmd, payload = null) {
-  const sessionId = Math.floor(Math.random() * 127) + 1; let req = encodeFieldVarint(1, 1); if (payload) req = concat(req, encodeFieldBytes(3, payload));
-  return concat(encodeFieldVarint(1, 1), encodeFieldVarint(2, cmd), encodeFieldVarint(3, sessionId), encodeFieldBytes(4, req));
+  const sessionId = Math.floor(Math.random() * 127) + 1; let req = encodeFieldVarint(1, 1);
+  if (payload) { const tag = encodeVarint((3 << 3) | 2), len = encodeVarint(payload.length); req = concat(req, tag, len, new Uint8Array(payload)); }
+  return concat(encodeFieldVarint(1, 1), encodeFieldVarint(2, cmd), encodeFieldVarint(3, sessionId), concat(encodeVarint((4 << 3) | 2), encodeVarint(req.length), req));
 }
+
 function handleMiNotification(event) { const value = new Uint8Array(event.target.value.buffer); if (challengeResolver && value.length >= 4) challengeResolver(value); }
 
 async function startBind() {
   document.getElementById('btnBind').disabled = true; logEl.innerHTML = '';
   try {
-    log("Scanning for HeyPlus devices...", "info");
-    const device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'HeyPlus' }], optionalServices: [SERVICE_MI, SERVICE_RYEEX] });
-    log("Connecting to GATT server...", "info"); const server = await device.gatt.connect();
+    log("Scanning for HeyPlus smartwatch devices...", "info");
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'HeyPlus' }, { services: [0xFE95] }],
+      optionalServices: [SERVICE_MI, SERVICE_RYEEX]
+    });
+
+    log("Connecting to watch GATT services...", "info"); const server = await device.gatt.connect();
     log("Resolving handles...", "info");
     const miService = await server.getPrimaryService(SERVICE_MI), ryeexService = await server.getPrimaryService(SERVICE_RYEEX);
     const miTokenChar = await miService.getCharacteristic(CHAR_MI_TOKEN), miEventChar = await miService.getCharacteristic(CHAR_MI_EVENT), openChar = await ryeexService.getCharacteristic(CHAR_RYEEX_OPEN);
@@ -89,9 +147,10 @@ async function startBind() {
     const rtcPacket = buildRbpRequest(17, timeFields); await xferSend(openChar, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
     
     log("== [NEW CODE] SUCCESS: Synced ==", "ok");
-    // Added 2-second sleep duration delay to keep connection open for watch RTC synchronization
-    await new Promise(r => setTimeout(r, 2500)); 
+    await new Promise(r => setTimeout(r, 3000)); 
   } catch (error) { log("!! BLE Disconnect Error !!: " + error, "err"); }
   finally { document.getElementById('btnBind').disabled = false; }
 }
-</script></body></html>
+</script>
+</body>
+</html>
