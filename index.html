@@ -4,22 +4,16 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
   h1 { color: #0ff; font-size: 18px; margin-bottom: 12px; }
-  button { background: #0ff; color: #000; border: none; padding: 12px 24px; font-size: 16px;
-           font-family: monospace; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
-  #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px;
-         margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  button { background: #0ff; color: #000; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
+  #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px; margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
   .ok { color: #0f0; } .info { color: #0ff; } .phase { color: #f0f; font-weight: bold; }
 </style></head><body>
 <h1>HeyPlus W2100 - Serverless Bind</h1>
 <button id="btnBind" onclick="startBind()">CONNECT & BIND</button><div id="log"></div>
 <script>
 const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98], DEVICE_PID = 911;
-const SERVICE_MI = 0xFE95, CHAR_MI_TOKEN = 0x0001, CHAR_MI_EVENT = 0x0010;
-const SERVICE_RYEEX = 0xB167, CHAR_RYEEX_RC4 = 0xAA00, CHAR_RYEEX_OPEN = 0xAA01;
-let sessionKey = null;
-const logEl = document.getElementById('log');
+let sessionKey = null; const logEl = document.getElementById('log');
 function log(msg, cls = '') { const span = document.createElement('span'); span.className = cls; span.textContent = msg + '\n'; logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight; }
-function int32ToLE(val) { const buf = new ArrayBuffer(4); new DataView(buf).setInt32(0, val, true); return new Uint8Array(buf); }
 function hexStr(arr) { return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join(''); }
 function mixA(mac, pid) { const p = [pid & 0xFF, (pid >> 8) & 0xFF]; return new Uint8Array([mac, mac, mac, p, p, mac, mac, mac]); }
 function rc4(key, data) {
@@ -41,8 +35,8 @@ function concat(...arrs) { const total = arrs.reduce((s, a) => s + a.length, 0),
 function crc16ccitt(data) {
   let crc = 0xFFFF; for (let i = 0; i < data.length; i++) { crc ^= (data[i] & 0xFF) << 8; for (let j = 0; j < 8; j++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF; } return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
 }
-function buildCmdFrame(pkgCount, transferSession) { const buf = new Uint8Array(8); buf = pkgCount & 0xFF; buf = (pkgCount >> 8) & 0xFF; buf = transferSession & 0xFF; buf = (transferSession >> 8) & 0xFF; return buf; }
-function buildDataFrame(sn, payload) { const buf = new Uint8Array(2 + payload.length); buf = sn & 0xFF; buf = (sn >> 8) & 0xFF; buf.set(payload, 2); return buf; }
+function buildCmdFrame(pkgCount, transferSession) { const buf = new Uint8Array(8); buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF; buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF; return buf; }
+function buildDataFrame(sn, payload) { const buf = new Uint8Array(2 + payload.length); buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF; buf.set(payload, 2); return buf; }
 async function xferSend(char, data) {
   const transferSession = Math.floor(Math.random() * 65535) + 100, cmdFrame = buildCmdFrame(1, transferSession); await char.writeValueWithResponse(cmdFrame); await new Promise(r => setTimeout(r, 60));
   const dataFrame = buildDataFrame(1, data); await char.writeValueWithResponse(dataFrame);
@@ -62,7 +56,7 @@ async function startBind() {
   document.getElementById('btnBind').disabled = true; logEl.innerHTML = '';
   try {
     log("Scanning for HeyPlus W2100 BLE Device...", "info");
-    const device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'HeyPlus' }], optionalServices: ['0000fe95-0000-1000-8000-00805f9b34fb', '0000b167-0000-1000-8000-00805f9b34fb'] });
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'HeyPlus' }, { services: [0xFE95] }], optionalServices: ['0000fe95-0000-1000-8000-00805f9b34fb', '0000b167-0000-1000-8000-00805f9b34fb'] });
     const server = await device.gatt.connect(), ryeexService = await server.getPrimaryService('0000b167-0000-1000-8000-00805f9b34fb');
     const openChar = await ryeexService.getCharacteristic('0000aa01-0000-1000-8000-00805f9b34fb');
     sessionKey = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
