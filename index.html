@@ -15,7 +15,7 @@
   #log { background: #0d0d1a; border: 1px solid #333; border-radius: 4px; padding: 12px;
          margin-top: 12px; font-size: 12px; line-height: 1.6; max-height: 70vh;
          overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-  .ok { color: #0f0; } .err { color: #f44; } .info { color: #0ff; } .phase { color: #f0f; font-weight: bold; }
+  .ok { color: #0f0; } .err { color: #f44; } .info { color: #0ff; } .warn { color: #fa0; } .phase { color: #f0f; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -36,7 +36,8 @@ const CHAR_RYEEX_OPEN = '0000aa01-0000-1000-8000-00805f9b34fb';
 
 let sessionKey = null;
 let challengeResolver = null;
-let bindConfirmResolver = null;
+let activeOpenChar = null;
+let activeRc4Char = null;
 
 const logEl = document.getElementById('log');
 function log(msg, cls = '') {
@@ -79,14 +80,14 @@ function crc16ccitt(data) {
 
 function buildCmdFrame(pkgCount, transferSession) {
   let buf = new Uint8Array(8);
-  buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF;
-  buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF;
+  buf = pkgCount & 0xFF; buf = (pkgCount >> 8) & 0xFF;
+  buf = transferSession & 0xFF; buf = (transferSession >> 8) & 0xFF;
   return buf;
 }
 
 function buildDataFrame(sn, payload) {
   let buf = new Uint8Array(2 + payload.length);
-  buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF;
+  buf = sn & 0xFF; buf = (sn >> 8) & 0xFF;
   buf.set(payload, 2);
   return buf;
 }
@@ -120,11 +121,33 @@ function handleMiNotification(event) {
   if (challengeResolver && value.length >= 4) challengeResolver(value); 
 }
 
-// Intercepts watch click notification confirmation frame
-function handleRyeexNotification(event) {
+// HIGH-PRIORITY INSTANT RESPONSE DETECTOR FOR WATCH BUTTON CLICKS
+async function handleRyeexNotification(event) {
   const value = new Uint8Array(event.target.value.buffer);
-  if (value.length > 4 && bindConfirmResolver) {
-    bindConfirmResolver(value);
+  
+  // If the watch fires any notify packet onto AA00, it means the user tapped "YES"
+  if (value.length >= 2 && activeRc4Char && activeOpenChar) {
+    log("Watch screen accepted button click captured!", "ok");
+    
+    try {
+      // Step 1: Send the Transport layer Frame Acknowledgement (ACK)
+      await activeRc4Char.writeValueWithResponse(new Uint8Array([0x00, 0x00, 0x01, 0x00]));
+      
+      // Step 2: Compile and inject Phase 4 Time update directly over the secure RC4 channel
+      const now = new Date(), timestampSeconds = Math.floor(now.getTime() / 1000), tzOffsetSeconds = -now.getTimezoneOffset() * 60;
+      const flatTimeFields = concat(
+        encodeFieldVarint(1, timestampSeconds),
+        encodeFieldVarint(2, tzOffsetSeconds),
+        encodeFieldVarint(3, now.getMilliseconds()),
+        encodeFieldVarint(4, 0)
+      );
+      const rtcPacket = buildRbpRequest(17, flatTimeFields); 
+      await xferSend(activeRc4Char, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
+      
+      log("== [FINAL AUTH] SUCCESS: Unlocked and Synced Real-Time Clock! == ", "ok");
+    } catch (e) {
+      log("Interception failure: " + e, "err");
+    }
   }
 }
 
@@ -141,7 +164,8 @@ async function startBind() {
     log("Resolving handles...", "info");
     const miService = await server.getPrimaryService(SERVICE_MI), ryeexService = await server.getPrimaryService(SERVICE_RYEEX);
     const miTokenChar = await miService.getCharacteristic(CHAR_MI_TOKEN), miEventChar = await miService.getCharacteristic(CHAR_MI_EVENT);
-    const rc4Char = await ryeexService.getCharacteristic(CHAR_RYEEX_RC4), openChar = await ryeexService.getCharacteristic(CHAR_RYEEX_OPEN);
+    activeRc4Char = await ryeexService.getCharacteristic(CHAR_RYEEX_RC4);
+    activeOpenChar = await ryeexService.getCharacteristic(CHAR_RYEEX_OPEN);
 
     sessionKey = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
 
@@ -156,43 +180,22 @@ async function startBind() {
     const rawChallenge = await challengePromise; await miTokenChar.writeValueWithResponse(rc4(sessionKey, rawChallenge)); await new Promise(r => setTimeout(r, 500));
 
     log("== [NEW CODE] Phase 3 Active == ", "phase");
-    await rc4Char.startNotifications(); rc4Char.addEventListener('characteristicvaluechanged', handleRyeexNotification);
+    // Start listening on the encrypted line BEFORE sending command 19
+    await activeRc4Char.startNotifications(); activeRc4Char.addEventListener('characteristicvaluechanged', handleRyeexNotification);
+    await activeOpenChar.startNotifications();
     
-    const p5 = new Uint8Array([0x08, 0x01, 0x10, 0x05, 0x18, 0x56, 0x22, 0x02, 0x08, 0x01]); await xferSend(openChar, concat(p5, crc16ccitt(p5))); await new Promise(r => setTimeout(r, 600));
-    const p30 = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]); await xferSend(openChar, concat(p30, crc16ccitt(p30))); await new Promise(r => setTimeout(r, 600));
+    const p5 = new Uint8Array([0x08, 0x01, 0x10, 0x05, 0x18, 0x56, 0x22, 0x02, 0x08, 0x01]); await xferSend(activeOpenChar, concat(p5, crc16ccitt(p5))); await new Promise(r => setTimeout(r, 600));
+    const p30 = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]); await xferSend(activeOpenChar, concat(p30, crc16ccitt(p30))); await new Promise(r => setTimeout(r, 600));
 
-    // Send command 19 to initiate the "Accept Binding?" screen prompt
+    // This triggers the pairing screen question layout on the watch hardware
     const confirmationPacket = buildRbpRequest(19, encodeFieldVarint(1, 1)); 
-    await xferSend(openChar, rc4(sessionKey, concat(confirmationPacket, crc16ccitt(confirmationPacket))));
+    await xferSend(activeOpenChar, rc4(sessionKey, concat(confirmationPacket, crc16ccitt(confirmationPacket))));
     
-    log("👉 TAP 'YES' ON YOUR WATCH SCREEN NOW...", "warn");
+    log("👉 NOW TAP 'YES' ON YOUR WATCH SCREEN...", "warn");
     
-    // Wait until user interacts with the physical watch interface screen bounds
-    const bindConfirmPromise = new Promise(res => { bindConfirmResolver = res; });
-    await bindConfirmPromise; 
-    log("Watch screen accepted button click captured!", "ok");
-
-    // Send immediate Transport Layer Acknowledge (ACK) to confirm the tap
-    const transportAckFrame = new Uint8Array([0x00, 0x00, 0x01, 0x00]);
-    await rc4Char.writeValueWithResponse(transportAckFrame);
-    await new Promise(r => setTimeout(r, 400));
-
-    log("== [NEW CODE] Phase 4 Active == ", "phase");
-    const now = new Date(), timestampSeconds = Math.floor(now.getTime() / 1000), tzOffsetSeconds = -now.getTimezoneOffset() * 60;
-    
-    const flatTimeFields = concat(
-      encodeFieldVarint(1, timestampSeconds),
-      encodeFieldVarint(2, tzOffsetSeconds),
-      encodeFieldVarint(3, now.getMilliseconds()),
-      encodeFieldVarint(4, 0)
-    );
-    const rtcPacket = buildRbpRequest(17, flatTimeFields); 
-    
-    // Crucial Routing Change: Send time configuration over the encrypted RC4 line (AA00)
-    await xferSend(rc4Char, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
-    
-    log("== [NEW CODE] SUCCESS: Bound and Synced! == ", "ok");
-    await new Promise(r => setTimeout(r, 3000)); 
+    // Give you up to 10 seconds to press the physical accept option on the watch face screen bounds
+    await new Promise(r => setTimeout(r, 10000)); 
+    log("\n[Session Event Window Closed]", "info");
   } catch (error) { log("!! BLE Binding Error !!: " + error, "err"); }
   finally { document.getElementById('btnBind').disabled = false; }
 }
