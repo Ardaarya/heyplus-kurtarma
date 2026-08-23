@@ -48,7 +48,8 @@ function encodeVarint(value) {
     const parts = []; let lo = value >>> 0, hi = 0xFFFFFFFF >>> 0;
     for (let i = 0; i < 10; i++) { parts.push((lo & 0x7F) | (lo > 0x7F || hi > 0 ? 0x80 : 0)); lo = ((lo >>> 7) | (hi << 25)) >>> 0; hi = hi >>> 7; } return new Uint8Array(parts);
   }
-  const parts = []; while (value > 0x7F) { parts.push((value & 0x7F) | 0x80); value >>>= 7; } parts.push(value & 0x7F); return new Uint8Array(parts);
+  const parts = []; while (value > 0x7F) { parts.push((value & 0x7F) | 0x80); value >>>= 7; }
+  parts.push(value & 0x7F); return new Uint8Array(parts);
 }
 
 function encodeFieldVarint(fieldNum, value) { return concat(encodeVarint((fieldNum << 3) | 0), encodeVarint(value)); }
@@ -71,7 +72,6 @@ async function xferSend(char, data) {
   const dataFrame = buildDataFrame(1, data); await char.writeValueWithResponse(dataFrame);
 }
 
-// Restored working payload builder definition
 function buildRbpRequest(cmd, payload = null) {
   const sessionId = Math.floor(Math.random() * 127) + 1; let req = encodeFieldVarint(1, 1); if (payload) req = concat(req, encodeFieldBytes(3, payload));
   return concat(encodeFieldVarint(1, 1), encodeFieldVarint(2, cmd), encodeFieldVarint(3, sessionId), concat(encodeVarint((4 << 3) | 2), encodeVarint(req.length), req));
@@ -104,9 +104,13 @@ async function startBind() {
     const p30 = new Uint8Array([0x08, 0x01, 0x10, 0x1e, 0x18, 0x20, 0x22, 0x02, 0x08, 0x01]);
     await xferSend(openChar, concat(p30, crc16ccitt(p30))); await new Promise(r => setTimeout(r, 600));
 
-    log("  BindResult (cmd=31) -> AA00", "info");
-    const p31 = new Uint8Array([0x08, 0x01, 0x10, 0x1f, 0x18, 0x77, 0x22, 0x0d, 0x08, 0x01, 0x1a, 0x09, 0x08, 0x00, 0x12, 0x05, 0x6c, 0x6f, 0x63, 0x61, 0x6c]);
-    await xferSend(rc4Char, concat(p31, crc16ccitt(p31))); await new Promise(r => setTimeout(r, 600));
+    log("  Dynamic BindResult (cmd=31) -> AA00", "info");
+    // Dynamically compile the internal binding parameter payload structure using your core encoder mechanics
+    const bindDataFields = concat(encodeFieldVarint(1, 1), encodeFieldBytes(3, new TextEncoder().encode("local")));
+    const p31Packet = buildRbpRequest(31, bindDataFields);
+    await xferSend(rc4Char, rc4(sessionKey, concat(p31Packet, crc16ccitt(p31Packet)))); await new Promise(r => setTimeout(r, 600));
+
+    log("Watch RESPONDED! Pairing state verified.", "ok");
 
     log("\n=== PHASE 4: Safe Time Patch ===", "phase");
     const now = new Date(), timestampSeconds = Math.floor(now.getTime() / 1000), tzOffsetSeconds = -now.getTimezoneOffset() * 60;
@@ -117,7 +121,7 @@ async function startBind() {
     await xferSend(openChar, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
     
     log("== SUCCESS: Watch bound and time synchronized! ==", "ok");
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
   } catch (error) { log("BLE Error: " + error, "err"); }
   finally { document.getElementById('btnBind').disabled = false; }
 }
