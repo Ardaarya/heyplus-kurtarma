@@ -60,12 +60,21 @@ function crc16ccitt(data) {
   let crc = 0xFFFF; for (let i = 0; i < data.length; i++) { crc ^= (data[i] & 0xFF) << 8; for (let j = 0; j < 8; j++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF; } return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
 }
 
+// Fixed original buffer array tracking parameters to stop Chrome crashes
 function buildCmdFrame(pkgCount, transferSession) {
-  let buf = new Uint8Array(8); buf = 0; buf = 0; buf = 0; buf = 0;
-  buf = pkgCount & 0xFF; buf = (pkgCount >> 8) & 0xFF; buf = transferSession & 0xFF; buf = (transferSession >> 8) & 0xFF; return buf;
+  let buf = new Uint8Array(8);
+  buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 0;
+  buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF;
+  buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF;
+  return buf;
 }
 
-function buildDataFrame(sn, payload) { let buf = new Uint8Array(2 + payload.length); buf = sn & 0xFF; buf = (sn >> 8) & 0xFF; buf.set(payload, 2); return buf; }
+function buildDataFrame(sn, payload) {
+  let buf = new Uint8Array(2 + payload.length);
+  buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF;
+  buf.set(payload, 2);
+  return buf;
+}
 
 async function xferSend(char, data) {
   const transferSession = Math.floor(Math.random() * 65535) + 100, cmdFrame = buildCmdFrame(1, transferSession); await char.writeValueWithResponse(cmdFrame); await new Promise(r => setTimeout(r, 60));
@@ -105,7 +114,6 @@ async function startBind() {
     await xferSend(openChar, concat(p30, crc16ccitt(p30))); await new Promise(r => setTimeout(r, 600));
 
     log("  Dynamic BindResult (cmd=31) -> AA00", "info");
-    // Dynamically compile the internal binding parameter payload structure using your core encoder mechanics
     const bindDataFields = concat(encodeFieldVarint(1, 1), encodeFieldBytes(3, new TextEncoder().encode("local")));
     const p31Packet = buildRbpRequest(31, bindDataFields);
     await xferSend(rc4Char, rc4(sessionKey, concat(p31Packet, crc16ccitt(p31Packet)))); await new Promise(r => setTimeout(r, 600));
