@@ -48,7 +48,7 @@ function log(msg, cls = '') {
 }
 
 function hexStr(arr) { return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join(''); }
-function mixA(mac, pid) { const p = [pid & 0xFF, (pid >> 8) & 0xFF]; return new Uint8Array([mac[0], mac[1], mac[2], p[0], p[1], mac[3], mac[4], mac[5]]); }
+function mixA(mac, pid) { const p = [pid & 0xFF, (pid >> 8) & 0xFF]; return new Uint8Array([mac, mac, mac, p, p, mac, mac, mac]); }
 
 function rc4(key, data) {
   const S = new Uint8Array(256); for (let i = 0; i < 256; i++) S[i] = i;
@@ -80,15 +80,14 @@ function crc16ccitt(data) {
   return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]);
 }
 
-// Fixed variables from Const to standard Array references
 function buildCmdFrame(pkgCount, transferSession) {
   let buf = new Uint8Array(8);
-  buf[0] = 0; buf[1] = 0; buf[2] = 0; buf[3] = 0;
   buf[4] = pkgCount & 0xFF; buf[5] = (pkgCount >> 8) & 0xFF;
   buf[6] = transferSession & 0xFF; buf[7] = (transferSession >> 8) & 0xFF;
   return buf;
 }
 
+// Fixed frame counter mappings
 function buildDataFrame(sn, payload) {
   let buf = new Uint8Array(2 + payload.length);
   buf[0] = sn & 0xFF; buf[1] = (sn >> 8) & 0xFF;
@@ -159,8 +158,16 @@ async function startBind() {
 
     log("== [NEW CODE] Phase 4 Active == ", "phase");
     const now = new Date(), timestampSeconds = Math.floor(now.getTime() / 1000), tzOffsetSeconds = -now.getTimezoneOffset() * 60;
-    const timeFields = concat(encodeFieldVarint(1, timestampSeconds), encodeFieldVarint(2, tzOffsetSeconds), encodeFieldVarint(3, now.getMilliseconds()), encodeFieldVarint(4, 0));
-    const rtcPacket = buildRbpRequest(17, timeFields); await xferSend(openChar, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
+    
+    // Updated clean top-level layout framework for the time settings command 17 packet
+    const flatTimeFields = concat(
+      encodeFieldVarint(1, timestampSeconds),
+      encodeFieldVarint(2, tzOffsetSeconds),
+      encodeFieldVarint(3, now.getMilliseconds()),
+      encodeFieldVarint(4, 0)
+    );
+    const rtcPacket = buildRbpRequest(17, flatTimeFields); 
+    await xferSend(openChar, rc4(sessionKey, concat(rtcPacket, crc16ccitt(rtcPacket))));
     
     log("== [NEW CODE] SUCCESS: Synced ==", "ok");
     await new Promise(r => setTimeout(r, 3000)); 
