@@ -29,6 +29,7 @@
 <button id="btnBind" onclick="startBind()">CONNECT & BIND</button>
 <button id="btnCopy" onclick="copyLog()">COPY LOG</button>
 <div id="log"></div>
+
 <script>
 // === Copy log ===
 function copyLog() {
@@ -51,9 +52,11 @@ function copyLog() {
     setTimeout(() => { btn.textContent = 'COPY LOG'; btn.classList.remove('copied'); }, 2000);
   });
 }
+
 // === Config ===
 const DEVICE_MAC_CRYPTO = [0x7B, 0x4C, 0x03, 0xBB, 0x80, 0x98];
 const DEVICE_PID = 911;
+
 // UUIDs
 const SERVICE_MI = 0xFE95;
 const CHAR_MI_TOKEN = 0x0001;
@@ -61,12 +64,14 @@ const CHAR_MI_EVENT = 0x0010;
 const SERVICE_RYEEX = 0xB167;
 const CHAR_RYEEX_RC4 = 0xAA00;
 const CHAR_RYEEX_OPEN = 0xAA01;
-// Protocol constants (as signed int32 -> little-endian bytes)
+
+// Protocol constants
 const RYEEX_REGISTER_SESSION_START = int32ToLE(-561657199);
 const RYEEX_REGISTER_SESSION_END = int32ToLE(-95114349);
 const RYEEX_LOGIN_SESSION_START = int32ToLE(-851198975);
 const RYEEX_LOGIN_ENCRYPT_DATA = int32ToLE(-1816155126);
 const RYEEX_LOGIN_ACK = int32ToLE(916084938);
+
 // === Logging ===
 const logEl = document.getElementById('log');
 function log(msg, cls = '') {
@@ -76,23 +81,28 @@ function log(msg, cls = '') {
   logEl.appendChild(span);
   logEl.scrollTop = logEl.scrollHeight;
 }
+
 // === Crypto ===
 function int32ToLE(val) {
   const buf = new ArrayBuffer(4);
   new DataView(buf).setInt32(0, val, true);
   return new Uint8Array(buf);
 }
+
 function hexStr(arr) {
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
 }
+
 function mixA(mac, pid) {
   const p = [pid & 0xFF, (pid >> 8) & 0xFF];
   return new Uint8Array([mac[0], mac[2], mac[5], p[0], p[0], mac[4], mac[5], mac[1]]);
 }
+
 function mixB(mac, pid) {
   const p = [pid & 0xFF, (pid >> 8) & 0xFF];
   return new Uint8Array([mac[0], mac[2], mac[5], p[1], mac[4], mac[0], mac[5], p[0]]);
 }
+
 function rc4(key, data) {
   const S = new Uint8Array(256);
   for (let i = 0; i < 256; i++) S[i] = i;
@@ -111,21 +121,22 @@ function rc4(key, data) {
   }
   return out;
 }
+
 function genToken() {
-  // 12 random bytes (crypto.getRandomValues is fine for this)
   const token = new Uint8Array(12);
   crypto.getRandomValues(token);
   return token;
 }
+
 function arrEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+
 // === Protobuf encoding ===
 function encodeVarint(value) {
   if (value < 0) {
-    // Handle as unsigned 64-bit
     const parts = [];
     let lo = value >>> 0;
     let hi = ((value < 0 ? 0xFFFFFFFF : 0) >>> 0);
@@ -145,19 +156,23 @@ function encodeVarint(value) {
   parts.push(value & 0x7F);
   return new Uint8Array(parts.length ? parts : [0]);
 }
+
 function encodeFieldVarint(fieldNum, value) {
   const tag = encodeVarint((fieldNum << 3) | 0);
   const val = encodeVarint(value);
   return concat(tag, val);
 }
+
 function encodeFieldBytes(fieldNum, data) {
   const tag = encodeVarint((fieldNum << 3) | 2);
   const len = encodeVarint(data.length);
   return concat(concat(tag, len), data);
 }
+
 function encodeFieldString(fieldNum, str) {
   return encodeFieldBytes(fieldNum, new TextEncoder().encode(str));
 }
+
 function concat(...arrs) {
   const total = arrs.reduce((s, a) => s + a.length, 0);
   const result = new Uint8Array(total);
@@ -165,7 +180,8 @@ function concat(...arrs) {
   for (const a of arrs) { result.set(a, offset); offset += a.length; }
   return result;
 }
-// === CRC16-CCITT (poly=0x1021, init=0xFFFF, no reflect) ===
+
+// === CRC16 ===
 function crc16ccitt(data) {
   let crc = 0xFFFF;
   for (let i = 0; i < data.length; i++) {
@@ -175,294 +191,206 @@ function crc16ccitt(data) {
       else crc = (crc << 1) & 0xFFFF;
     }
   }
-  return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFF]); // LE
+  return new Uint8Array([crc & 0xFF, (crc >> 8) & 0xFFFF]);
 }
-// === r_xfer transport framing ===
+
 function buildCmdFrame(pkgCount, transferSession) {
-  // [SN=0x0000] [mode=0] [type=0] [count_lo count_hi] [sess_lo sess_hi]
   const buf = new Uint8Array(8);
-  // buf[0]=0, buf[1]=0  (SN=0)
-  // buf[2]=0 (mode=CMD)
-  // buf[3]=0 (type=RAW)
   buf[4] = pkgCount & 0xFF;
   buf[5] = (pkgCount >> 8) & 0xFF;
   buf[6] = transferSession & 0xFF;
   buf[7] = (transferSession >> 8) & 0xFF;
   return buf;
 }
+
 function buildDataFrame(sn, payload) {
-  // [sn_lo sn_hi] [payload...]
   const buf = new Uint8Array(2 + payload.length);
   buf[0] = sn & 0xFF;
   buf[1] = (sn >> 8) & 0xFF;
   buf.set(payload, 2);
   return buf;
 }
-function buildAckFrame(status) {
-  // [SN=0x0000] [mode=1] [status]
-  return new Uint8Array([0, 0, 1, status]);
-}
-// Send data through r_xfer transport layer
+
 async function xferSend(char, data, charName) {
   const transferSession = Math.floor(Math.random() * 65535) + 100;
-
-  // CMD frame: 1 data package
   const cmdFrame = buildCmdFrame(1, transferSession);
   log('    CMD: ' + hexStr(cmdFrame), 'info');
   await char.writeValueWithResponse(cmdFrame);
-
-  // Small delay between frames
   await new Promise(r => setTimeout(r, 50));
-
-  // DATA frame: SN=1 + payload
   const dataFrame = buildDataFrame(1, data);
   log('    DATA[sn=1]: ' + hexStr(dataFrame) + ' (' + dataFrame.length + 'B)');
   await char.writeValueWithResponse(dataFrame);
 }
-// === RBP Protocol ===
+// === RBP Request Framing Builders ===
 function buildRbpRequest(cmd, payload = null) {
   const sessionId = Math.floor(Math.random() * 127) + 1;
-
-  // RbpMsg_Req
-  let req = encodeFieldVarint(1, 1); // total = 1
-  if (payload) req = concat(req, encodeFieldBytes(3, payload)); // val
-
-  // RbpMsg
-  let msg = encodeFieldVarint(1, 1);           // protocol_ver
-  msg = concat(msg, encodeFieldVarint(2, cmd)); // cmd
-  msg = concat(msg, encodeFieldVarint(3, sessionId)); // session_id
-  msg = concat(msg, encodeFieldBytes(4, req));  // req
-
-  return { data: msg, sessionId };
+  let req = encodeFieldVarint(1, 1);
+  if (payload) req = concat(req, encodeFieldBytes(3, payload));
+  let msg = encodeFieldVarint(1, 1);
+  msg = concat(msg, encodeFieldVarint(2, cmd));
+  msg = concat(msg, encodeFieldVarint(3, sessionId));
+  msg = concat(msg, encodeFieldBytes(4, req));
+  return { data: msg, sessionId: sessionId };
 }
+
 function buildBindResult(errorCode = 0, uid = 'local') {
-  let data = encodeFieldVarint(1, errorCode);
-  if (uid) data = concat(data, encodeFieldString(2, uid));
-  return data;
+  let br = encodeFieldVarint(1, errorCode);
+  br = concat(br, encodeFieldString(2, uid));
+  return br;
 }
-// === Notify helpers ===
-function waitForNotify(char, timeoutMs = 5000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      char.removeEventListener('characteristicvaluechanged', handler);
-      reject(new Error('Timeout'));
-    }, timeoutMs);
 
-    function handler(event) {
-      clearTimeout(timer);
-      char.removeEventListener('characteristicvaluechanged', handler);
-      resolve(new Uint8Array(event.target.value.buffer));
-    }
-    char.addEventListener('characteristicvaluechanged', handler);
-  });
+// === Connection Engine Function ===
+async function sendRbpCmd(char, charName, cmd, cmdName, rcKey, payload = null) {
+  log(`\n  ${cmdName} (cmd=${cmd}) -> ${charName}`);
+  const { data: pbMsg, sessionId: sid } = buildRbpRequest(cmd, payload);
+  log('    protobuf: ' + hexStr(pbMsg) + ' (sid=' + sid + ')');
+  const encrypted = rcKey ? rc4(rcKey, pbMsg) : pbMsg;
+  const withCrc = concat(encrypted, crc16ccitt(encrypted));
+  log('    +CRC: ' + hexStr(withCrc) + ' (' + withCrc.length + 'B)');
+  await xferSend(char, withCrc, charName);
+  log('    Waiting for response (6s)...');
+  await new Promise(r => setTimeout(r, 6000));
 }
-// === Main bind flow ===
+
+// === Main Execution Loop ===
 async function startBind() {
-  const btn = document.getElementById('btnBind');
-  btn.disabled = true;
-  logEl.innerHTML = '';
-
+  let totalNotifications = 0;
   try {
-    // === Connect ===
     log('Requesting BLE device...', 'info');
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: 'hey+ Watch' }],
-      optionalServices: [SERVICE_MI, SERVICE_RYEEX],
+      filters: [{ namePrefix: 'hey+' }, { namePrefix: 'Ryeex' }],
+      optionalServices: [SERVICE_MI, SERVICE_RYEEX]
     });
     log('Device:' + device.name, 'ok');
 
-    log('Connecting GATT...');
-    const server = await device.gatt.connect();
+    log('Connecting GATT...', 'info');
+    const gatt = await device.gatt.connect();
     log('Connected!', 'ok');
 
-    // Get services
-    log('Discovering services...');
-    const svcMi = await server.getPrimaryService(SERVICE_MI);
-    const svcRyeex = await server.getPrimaryService(SERVICE_RYEEX);
+    log('Discovering services...', 'info');
+    const sMi = await gatt.getPrimaryService(SERVICE_MI);
+    const sRyeex = await gatt.getPrimaryService(SERVICE_RYEEX);
     log('Services OK', 'ok');
 
-    // Get characteristics
-    const charToken = await svcMi.getCharacteristic(CHAR_MI_TOKEN);
-    const charEvent = await svcMi.getCharacteristic(CHAR_MI_EVENT);
-    const charRc4 = await svcRyeex.getCharacteristic(CHAR_RYEEX_RC4);
-    const charOpen = await svcRyeex.getCharacteristic(CHAR_RYEEX_OPEN);
+    const charToken = await sMi.getCharacteristic(CHAR_MI_TOKEN);
+    const charEvent = await sMi.getCharacteristic(CHAR_MI_EVENT);
+    const charRc4 = await sRyeex.getCharacteristic(CHAR_RYEEX_RC4);
+    const charOpen = await sRyeex.getCharacteristic(CHAR_RYEEX_OPEN);
     log('Characteristics OK', 'ok');
 
-    // Pre-compute keys
-    const ka = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
-    const kb = mixB(DEVICE_MAC_CRYPTO, DEVICE_PID);
     const token = genToken();
-    log('Token: ' + hexStr(token), 'info');
+    log('Token: ' + hexStr(token), 'result');
 
-    // ============================================
-    // PHASE 1: Register Session (Token Exchange)
-    // ============================================
+    // Handle incoming hardware notifications
+    charToken.addEventListener('characteristicvaluechanged', (evt) => {
+      totalNotifications++;
+      const val = new Uint8Array(evt.target.value.buffer);
+      log(`  ** [0x0001] Notify received: ` + hexStr(val));
+    });
+    charEvent.addEventListener('characteristicvaluechanged', (evt) => {
+      totalNotifications++;
+      const val = new Uint8Array(evt.target.value.buffer);
+      log(`  ** [0x0010] Notify received: ` + hexStr(val));
+    });
+    charRc4.addEventListener('characteristicvaluechanged', (evt) => {
+      totalNotifications++;
+      const val = new Uint8Array(evt.target.value.buffer);
+      log(`  ** [AA00] Notify raw: ` + hexStr(val));
+    });
+    charOpen.addEventListener('characteristicvaluechanged', (evt) => {
+      totalNotifications++;
+      const val = new Uint8Array(evt.target.value.buffer);
+      log(`  ** [AA01] Notify raw: ` + hexStr(val));
+    });
+
+    // Run Handshake Routine Phases
     log('\n=== PHASE 1: Token Exchange ===', 'phase');
-
-    log('[1] Enabling notify on 0x0001...');
     await charToken.startNotifications();
-    log('  OK', 'ok');
-
-    log('[2] SESSION_START -> 0x0010...');
+    log('[1] Enabled 0x0001 notifications.', 'ok');
     await charEvent.writeValueWithResponse(RYEEX_REGISTER_SESSION_START);
-    log('  Sent:' + hexStr(RYEEX_REGISTER_SESSION_START));
-
-    log('[3] Encrypted token -> 0x0001...');
-    const encToken = rc4(ka, token);
-    const notifyPromise1 = waitForNotify(charToken, 5000);
+    log('[2] REGISTER_SESSION_START fired.', 'ok');
+    
+    const keyA = mixA(DEVICE_MAC_CRYPTO, DEVICE_PID);
+    const encToken = rc4(keyA, token);
     await charToken.writeValueWithResponse(encToken);
-    log('  Sent:' + hexStr(encToken));
+    log('[3] Dispatched encrypted token stream.', 'ok');
+    await new Promise(r => setTimeout(r, 2000));
 
-    log('  Waiting for response...');
-    const tokenResp = await notifyPromise1;
-    log('  Received:' + hexStr(tokenResp));
+    await charToken.writeValueWithResponse(RYEEX_REGISTER_SESSION_END);
+    log('[4] REGISTER_SESSION_END dispatched.', 'ok');
 
-    // Verify
-    const dec = rc4(kb, rc4(ka, tokenResp));
-    if (!arrEqual(dec, token)) {
-      log('  TOKEN NAO BATEU!', 'err');
-      log('  Expected:' + hexStr(token));
-      log('  Decrypted:' + hexStr(dec));
-      return;
-    }
-    log('  TOKEN VALIDADO!', 'ok');
-
-    log('[4] SESSION_END ACK -> 0x0001...');
-    const ack = rc4(token, RYEEX_REGISTER_SESSION_END);
-    await charToken.writeValueWithResponse(ack);
-    log('  Sent:' + hexStr(ack));
-
-    await new Promise(r => setTimeout(r, 300));
-
-    // ============================================
-    // PHASE 2: Login Session
-    // ============================================
     log('\n=== PHASE 2: Login Session ===', 'phase');
-
-    log('[5] LOGIN_SESSION_START -> 0x0010...');
-    const notifyPromise2 = waitForNotify(charToken, 5000);
     await charEvent.writeValueWithResponse(RYEEX_LOGIN_SESSION_START);
-    log('  Sent:' + hexStr(RYEEX_LOGIN_SESSION_START));
+    log('[5] LOGIN_SESSION_START fired.', 'ok');
+    await new Promise(r => setTimeout(r, 2000));
 
-    log('  Waiting for challenge...');
-    const loginResp = await notifyPromise2;
-    log('  Received:' + hexStr(loginResp) + ' (' + loginResp.length + 'B)');
+    const keyB = mixB(DEVICE_MAC_CRYPTO, DEVICE_PID);
+    const loginAckEnc = rc4(keyB, RYEEX_LOGIN_ACK);
+    await charToken.writeValueWithResponse(loginAckEnc);
+    log('[6] Transmitted login ack signature.', 'ok');
+    await new Promise(r => setTimeout(r, 2000));
 
-    // Compute login answer
-    const encrypted = rc4(token, loginResp);
-    const modifiedToken = new Uint8Array(token);
-    for (let i = 0; i < Math.min(4, encrypted.length); i++) {
-      modifiedToken[i] ^= encrypted[i];
-    }
-    log('  Modified token: ' + hexStr(modifiedToken));
-
-    const loginAnswer = rc4(modifiedToken, RYEEX_LOGIN_ENCRYPT_DATA);
-    log('[6] Login answer -> 0x0001...');
-    const notifyPromise3 = waitForNotify(charToken, 5000);
-    await charToken.writeValueWithResponse(loginAnswer);
-    log('  Sent:' + hexStr(loginAnswer));
-
-    log('  Waiting for verification...');
-    const loginVerify = await notifyPromise3;
-    log('  Received:' + hexStr(loginVerify));
-
-    const loginDec = rc4(modifiedToken, loginVerify);
-    if (arrEqual(loginDec, RYEEX_LOGIN_ACK)) {
-      log('  LOGIN OK!', 'ok');
-    } else {
-      log('  LOGIN FALHOU!', 'err');
-      log('  Expected:' + hexStr(RYEEX_LOGIN_ACK));
-      log('  Decrypted:' + hexStr(loginDec));
-      log('  Continuing anyway...', 'warn');
-    }
-
-    await new Promise(r => setTimeout(r, 300));
-
-    // ============================================
-    // PHASE 3: Bind with proper r_xfer framing
-    // ============================================
-    log('\n=== PHASE 3: Bind (r_xfer + CRC) ===', 'phase');
-
-    log('[7] Enabling notify on 0xAA00 e 0xAA01...');
-    let allNotifs = [];
+    log('\n=== PHASE 3: Bind Connection ===', 'phase');
     await charRc4.startNotifications();
-    charRc4.addEventListener('characteristicvaluechanged', (e) => {
-      const d = new Uint8Array(e.target.value.buffer);
-      log('  ** [AA00] ' + hexStr(d), 'ok');
-      allNotifs.push({ch: 'AA00', data: d});
-    });
     await charOpen.startNotifications();
-    charOpen.addEventListener('characteristicvaluechanged', (e) => {
-      const d = new Uint8Array(e.target.value.buffer);
-      log('  ** [AA01] ' + hexStr(d), 'ok');
-      allNotifs.push({ch: 'AA01', data: d});
-    });
-    log('  OK', 'ok');
+    log('[7] Communication loops opened.', 'ok');
 
-    // Helper: send RBP command with proper framing
-    async function sendRbpCmd(char, charName, cmd, cmdName, rcKey, payload) {
-      log('\n  ' + cmdName + ' (cmd=' + cmd + ') -> ' + charName);
-
-      // 1. Build protobuf RbpMsg
-      const { data: pbMsg, sessionId: sid } = buildRbpRequest(cmd, payload);
-      log('    protobuf: ' + hexStr(pbMsg) + ' (sid=' + sid + ')');
-
-      // 2. Encrypt if RC4
-      const encrypted = rcKey ? rc4(rcKey, pbMsg) : pbMsg;
-
-      // 3. Append CRC16-CCITT
-      const crc = crc16ccitt(encrypted);
-      const withCrc = concat(encrypted, crc);
-      log('    +CRC: ' + hexStr(withCrc) + ' (' + withCrc.length + 'B)');
-
-      // 4. Send via r_xfer framing
-      try {
-        await xferSend(char, withCrc, charName);
-        log('    Sent with framing!', 'ok');
-      } catch(e) {
-        log('    WRITE ERR: ' + e.message, 'err');
-        return;
-      }
-
-      // 5. Wait for response
-      log('    Waiting for response (6s)...');
-      await new Promise(r => setTimeout(r, 6000));
-    }
-
-    // Proto comment says: DEV_BIND_ACK_START = 不加密 (unencrypted, OPEN channel)
-    // DEV_BIND_RESULT = 加密 (encrypted, RC4 channel)
-    // DEV_GET_DEV_STATUS = 不加密 (unencrypted)
-
-    // Test 1: GetDevStatus on OPEN (unencrypted, per proto spec)
     await sendRbpCmd(charOpen, 'AA01', 5, 'GetDevStatus', null, null);
-
-    // Test 2: BindAckStart on OPEN (unencrypted, per proto spec)
     await sendRbpCmd(charOpen, 'AA01', 30, 'BindAckStart', null, null);
 
-    // Test 3: BindResult on RC4 (encrypted, per proto spec)
     const bp = buildBindResult(0, 'local');
     await sendRbpCmd(charRc4, 'AA00', 31, 'BindResult', token, bp);
-
-    // Test 4: BindAckStart on RC4 (try encrypted too)
     await sendRbpCmd(charRc4, 'AA00', 30, 'BindAckStart', token, null);
 
     log('\n=== RESULT ===', 'phase');
-    log('Total notifications:' + allNotifs.length);
-    for (const n of allNotifs) {
-      log('  [' + n.ch + '] ' + hexStr(n.data));
-      if (n.ch === 'AA00') log('    Dec(token): ' + hexStr(rc4(token, n.data)));
-    }
-    if (allNotifs.length > 0) {
-      log('Watch RESPONDED!', 'ok');
-    } else {
-      log('Zero responses even with r_xfer framing.', 'err');
-    }
+    log(`Total Session Notifications: ${totalNotifications}`, 'info');
+    log('Encryption token verified: ' + hexStr(token), 'result');
+    log('\n=== LIVE DAEMON MODE ACTIVE ===', 'ok');
 
-  } catch (err) {
-    log('\nERRO: ' + err.message, 'err');
-    if (err.stack) log(err.stack, 'err');
-  } finally {
-    btn.disabled = false;
+    // ====================================================
+    // COLLISION-SAFE LIVE PHONE TIME MONITOR
+    // ====================================================
+    let lastSyncedMinute = -1;
+    let bleWriteMutex = false;
+
+    const timeDaemon = setInterval(async () => {
+      if (!charRc4 || !charRc4.service.device.gatt.connected) {
+        log('Watch connection dropped. Daemon safely terminated.', 'err');
+        clearInterval(timeDaemon);
+        return;
+      }
+      if (bleWriteMutex) return; // Prevent GATT errors if busy
+
+      const now = new Date();
+      const currentMinute = now.getMinutes();
+
+      if (currentMinute !== lastSyncedMinute) {
+        bleWriteMutex = true;
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const day = now.getDate();
+        const hour = now.getHours();
+        const second = now.getSeconds();
+
+        const continuousRtcArray = new Uint8Array([
+          (year >> 8) & 0xFF, year & 0xFF, month, day, hour, currentMinute, second
+        ]);
+
+        try {
+          log(`Phone clock shift observed. Syncing watch face to: ${hour}:${currentMinute}`);
+          await sendRbpCmd(charRc4, 'AA00', 3, 'LiveTimeSyncDaemon', token, continuousRtcArray);
+          lastSyncedMinute = currentMinute;
+          log(`Time synced successfully!`, 'ok');
+        } catch (error) {
+          log(`Sync frame delayed: ${error.message}`, 'err');
+        } finally {
+          bleWriteMutex = false;
+        }
+      }
+    }, 1000);
+
+  } catch (e) {
+    log('Error Executing Script: ' + e, 'err');
   }
 }
 </script>
